@@ -1,0 +1,63 @@
+GEBUNDELD ANALYSE RAPPORT
+Datum: 18-01-2026 15:40
+Aantal bronbestanden: 4
+============================================================
+
+📄 BRONBESTAND: /projectvaktest.pdf
+ANALYSE:
+FOUT: Dit document bevat geen bruikbare tekst (gevonden tekst: 'projectvak').
+------------------------------------------------------------
+
+📄 BRONBESTAND: /joerimuldervak.pdf
+ANALYSE:
+**Samenvatting:**
+
+De tekst, getiteld "3. De vis die wiskunde studeerde", beschrijft een vis die een universiteit startte op de bodem van een glaasje water. Zijn studenten waren luchtbelletjes die enkel in formules spraken. De vis vroeg serieus wie de wortel van een regenboog kon uitleggen, terwijl een plastic plant applaudisseerde. Dagelijks bewees hij nieuwe stellingen met zijn vinnen, totdat hij ontdekte dat het getal zeven verliefd was op de komma. Daarna verdween de vis spoorloos, mogelijk opgelost in logaritmes of gewoon verveeld. Alleen het water weet het, maar dat praat niet zonder certificaat.
+
+**Belangrijkste punten:**
+
+*   De titel is "3. De vis die wiskunde studeerde".
+*   Een vis begon zijn eigen universiteit in een glaasje water.
+*   De studenten waren luchtbelletjes die in formules spraken.
+*   De vis vroeg naar de wortel van een regenboog en een plastic plant applaudisseerde.
+*   Hij bewees dagelijks stellingen met zijn vinnen.
+*   De vis ontdekte dat het getal zeven verliefd was op de komma.
+*   Daarna verdween de vis spoorloos (mogelijk opgelost in logaritmes of verveeld).
+*   Alleen het water weet wat er gebeurde, maar dat praat niet zonder certificaat.
+------------------------------------------------------------
+
+📄 BRONBESTAND: /natuurkundevak.pdf
+ANALYSE:
+Hier is de samenvatting en de belangrijkste punten, uitsluitend gebaseerd op de verstrekte tekst:
+
+**Samenvatting:**
+De tekst, getiteld "2. De koelkast die zong in do mineur", beschrijft hoe elke nacht de koelkast zelf opent en een concert in do mineur begint. Tijdens dit concert klappen de eieren ritmisch, zingt de boter tweede stem en speelt de prei een melancholisch solo. Recentelijk deed ook de melk vals maar enthousiast mee. Pogingen om dit op te nemen mislukten, aangezien het geluid verdween zodra ernaar werd gekeken. Overdag zwijgt de koelkast. De kaas lijkt vermoeider, wat wordt toegeschreven aan het 'tourleven'. De verteller overweegt oordoppen, een dirigent, of beide te kopen.
+
+**Belangrijkste punten:**
+
+*   **Titel:** 2. De koelkast die zong in do mineur
+*   Elke nacht opent de koelkast zelf zijn deur en begint een concert in do mineur.
+*   De eieren klappen ritmisch.
+*   De boter zingt tweede stem.
+*   De prei speelt een melancholisch solo op zijn eigen bladeren.
+*   De melk deed mee, vals maar enthousiast.
+*   Het geluid verdween zodra er werd gekeken bij pogingen tot opnemen.
+*   Overdag zwijgt de koelkast en doet alsof niets gebeurt.
+*   De kaas lijkt vermoeider, waarschijnlijk van het tourleven.
+*   De verteller overweegt morgen oordoppen, een dirigent, of allebei te kopen.
+------------------------------------------------------------
+
+📄 BRONBESTAND: /vak.pdf
+ANALYSE:
+**Samenvatting:**
+De tekst, getiteld "De banaan en de minister", beschrijft hoe een banaan het woord nam in het parlement en eiste dat er meer vitamine D in de wetboeken kwam. De premier was verrast, terwijl de lucht naar pannenkoeken rook en duiven buiten het wifi-signaal probeerden te hacken. De banaan kreeg applaus en werd benoemd tot minister van Gele Zaken. Sinds deze benoeming zijn bananenschillen verplicht schoeisel op maandag en draaien debatten om smoothies. Hoewel niemand iets begrijpt, is iedereen opvallend gezond.
+
+**Belangrijkste punten:**
+
+*   Een banaan nam het woord in het parlement.
+*   De banaan eiste meer vitamine D in de wetboeken.
+*   De banaan werd benoemd tot minister van Gele Zaken.
+*   Bananenschillen zijn sindsdien verplicht schoeisel op maandag.
+*   Elk debat draait om smoothies.
+*   Iedereen is opvallend gezond, ondanks dat niemand de situatie begrijpt.
+------------------------------------------------------------

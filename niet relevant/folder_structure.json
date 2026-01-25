@@ -1,0 +1,38 @@
+{
+  "/Georganiseerd": {
+    "name": "Georganiseerd",
+    "created": "2026-01-24T20:17:54.336274",
+    "description": "Auto-detected",
+    "file_count": 0
+  },
+  "/Georganiseerd/Contracten": {
+    "name": "Contracten",
+    "created": "2026-01-24T20:17:54.557849",
+    "description": "Auto-detected",
+    "file_count": 0
+  },
+  "/Georganiseerd/Contracten/Huurcontracten": {
+    "name": "Huurcontracten",
+    "created": "2026-01-24T20:17:54.771666",
+    "description": "Auto-detected",
+    "file_count": 6
+  },
+  "/Georganiseerd/Teksten": {
+    "name": "Teksten",
+    "created": "2026-01-24T20:17:54.984272",
+    "description": "Auto-detected",
+    "file_count": 3
+  },
+  "/Georganiseerd/Onderwijs": {
+    "name": "Onderwijs",
+    "created": "2026-01-24T20:17:55.187613",
+    "description": "Auto-detected",
+    "file_count": 0
+  },
+  "/Georganiseerd/Onderwijs/Bedrijfskunde": {
+    "name": "Bedrijfskunde",
+    "created": "2026-01-24T20:17:55.400961",
+    "description": "Auto-detected",
+    "file_count": 6
+  }
+}

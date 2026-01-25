@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contract Data Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #eee;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .field-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #555;
+            margin-bottom: 5px;
+        }
+
+        input, textarea, select {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .confidence-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .confidence-high {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .confidence-medium {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .confidence-low {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #004085;
+        }
+
+        .warning-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #856404;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        @media print {
+            .actions, .info-box, .warning-box {
+                display: none;
+            }
+
+            .container {
+                box-shadow: none;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Contract Data Viewer</h1>
+        <p class="subtitle">Laad JSON data uit je Python script en bekijk/bewerk de gegevens</p>
+
+        <div class="actions">
+            <input type="file" id="fileInput" accept=".json">
+            <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                Laad JSON Bestand
+            </button>
+            <button class="btn btn-secondary" onclick="window.print()">
+                Print / PDF
+            </button>
+            <button class="btn btn-secondary" onclick="exportJSON()">
+                Exporteer JSON
+            </button>
+            <button class="btn btn-secondary" onclick="clearForm()">
+                Reset
+            </button>
+        </div>
+
+        <div id="confidence-info"></div>
+
+        <!-- Document Info -->
+        <div class="section">
+            <h2 class="section-title">Document Informatie</h2>
+            <div class="field-group">
+                <div class="field">
+                    <label>Document Type</label>
+                    <input type="text" id="document_type" placeholder="Bijv. Huurovereenkomst">
+                </div>
+                <div class="field">
+                    <label>Datum Contract</label>
+                    <input type="text" id="datum" placeholder="Bijv. 01-01-2024">
+                </div>
+            </div>
+        </div>
+
+        <!-- Partijen -->
+        <div class="section">
+            <h2 class="section-title">Partijen</h2>
+
+            <h3 style="font-size: 16px; margin-bottom: 10px; color: #666;">Verhuurder</h3>
+            <div class="field-group">
+                <div class="field">
+                    <label>Naam</label>
+                    <input type="text" id="verhuurder_naam">
+                </div>
+                <div class="field">
+                    <label>Adres</label>
+                    <input type="text" id="verhuurder_adres">
+                </div>
+                <div class="field">
+                    <label>Telefoon</label>
+                    <input type="text" id="verhuurder_telefoon">
+                </div>
+                <div class="field">
+                    <label>Email</label>
+                    <input type="email" id="verhuurder_email">
+                </div>
+            </div>
+
+            <h3 style="font-size: 16px; margin: 20px 0 10px; color: #666;">Huurder</h3>
+            <div class="field-group">
+                <div class="field">
+                    <label>Naam</label>
+                    <input type="text" id="huurder_naam">
+                </div>
+                <div class="field">
+                    <label>Adres</label>
+                    <input type="text" id="huurder_adres">
+                </div>
+                <div class="field">
+                    <label>Telefoon</label>
+                    <input type="text" id="huurder_telefoon">
+                </div>
+                <div class="field">
+                    <label>Email</label>
+                    <input type="email" id="huurder_email">
+                </div>
+            </div>
+        </div>
+
+        <!-- Pand -->
+        <div class="section">
+            <h2 class="section-title">Pand Informatie</h2>
+            <div class="field-group">
+                <div class="field">
+                    <label>Adres</label>
+                    <input type="text" id="pand_adres">
+                </div>
+                <div class="field">
+                    <label>Type</label>
+                    <input type="text" id="pand_type" placeholder="Bijv. Appartement, Huis">
+                </div>
+                <div class="field">
+                    <label>Oppervlakte (m²)</label>
+                    <input type="text" id="pand_oppervlakte">
+                </div>
+                <div class="field">
+                    <label>Aantal Kamers</label>
+                    <input type="text" id="pand_kamers">
+                </div>
+                <div class="field">
+                    <label>Verdieping</label>
+                    <input type="text" id="pand_verdieping">
+                </div>
+                <div class="field">
+                    <label>EPC Label</label>
+                    <input type="text" id="pand_epc">
+                </div>
+            </div>
+        </div>
+
+        <!-- Financieel -->
+        <div class="section">
+            <h2 class="section-title">Financiële Gegevens</h2>
+            <div class="field-group">
+                <div class="field">
+                    <label>Huurprijs (€/maand)</label>
+                    <input type="text" id="huurprijs">
+                </div>
+                <div class="field">
+                    <label>Waarborg (€)</label>
+                    <input type="text" id="waarborg">
+                </div>
+                <div class="field">
+                    <label>Kosten (€/maand)</label>
+                    <input type="text" id="kosten">
+                </div>
+                <div class="field">
+                    <label>Indexatie</label>
+                    <input type="text" id="indexatie" placeholder="Ja/Nee">
+                </div>
+            </div>
+        </div>
+
+        <!-- Periodes -->
+        <div class="section">
+            <h2 class="section-title">Periodes & Data</h2>
+            <div class="field-group">
+                <div class="field">
+                    <label>Ingangsdatum</label>
+                    <input type="text" id="ingangsdatum">
+                </div>
+                <div class="field">
+                    <label>Einddatum</label>
+                    <input type="text" id="einddatum">
+                </div>
+                <div class="field">
+                    <label>Duur</label>
+                    <input type="text" id="duur" placeholder="Bijv. 9 jaar">
+                </div>
+                <div class="field">
+                    <label>Opzegtermijn</label>
+                    <input type="text" id="opzegtermijn">
+                </div>
+            </div>
+        </div>
+
+        <!-- Voorwaarden -->
+        <div class="section">
+            <h2 class="section-title">Voorwaarden</h2>
+            <div class="field-group">
+                <div class="field">
+                    <label>Huisdieren</label>
+                    <input type="text" id="huisdieren" placeholder="Ja/Nee">
+                </div>
+                <div class="field">
+                    <label>Onderverhuur</label>
+                    <input type="text" id="onderverhuur" placeholder="Ja/Nee">
+                </div>
+            </div>
+            <div class="field">
+                <label>Opmerkingen / Bijzondere Voorwaarden</label>
+                <textarea id="voorwaarden_extra" rows="4"></textarea>
+            </div>
+        </div>
+
+        <!-- Samenvatting -->
+        <div class="section">
+            <h2 class="section-title">Samenvatting</h2>
+            <div class="field">
+                <textarea id="summary" rows="6" readonly style="background: #f9f9f9;"></textarea>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentData = {};
+
+        // Laad JSON file
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                try {
+                    const json = JSON.parse(event.target.result);
+                    currentData = json;
+                    loadData(json);
+                } catch (error) {
+                    alert('Fout bij laden JSON: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        function loadData(json) {
+            // Helper functie om nested data op te halen
+            function get(obj, path, defaultValue = '') {
+                const keys = path.split('.');
+                let result = obj;
+                for (let key of keys) {
+                    result = result?.[key];
+                    if (result === undefined || result === null) return defaultValue;
+                }
+                return result;
+            }
+
+            // Confidence info
+            const conf = json.confidence || {};
+            const confDiv = document.getElementById('confidence-info');
+
+            if (conf.score !== undefined) {
+                let badgeClass = 'confidence-low';
+                let boxClass = 'warning-box';
+
+                if (conf.score >= 95) {
+                    badgeClass = 'confidence-high';
+                    boxClass = 'info-box';
+                } else if (conf.score >= 80) {
+                    badgeClass = 'confidence-medium';
+                }
+
+                confDiv.innerHTML = `
+                    <div class="${boxClass}">
+                        <strong>Kwaliteit Score: ${conf.score}%</strong>
+                        <span class="confidence-badge ${badgeClass}">${conf.score}%</span>
+                        <br><br>
+                        ${conf.details || ''}
+                        ${conf.needs_review ? '<br><br><strong>⚠️ Handmatige controle aanbevolen</strong>' : ''}
+                    </div>
+                `;
+            }
+
+            // Data extractie
+            const data = json.data || json;
+
+            // Document info
+            document.getElementById('document_type').value = get(data, 'document_type');
+            document.getElementById('datum').value = get(data, 'datum') || get(data, 'datum_contract');
+
+            // Verhuurder
+            document.getElementById('verhuurder_naam').value = get(data, 'partijen.verhuurder.naam') || get(data, 'partijen.verhuurder');
+            document.getElementById('verhuurder_adres').value = get(data, 'partijen.verhuurder.adres');
+            document.getElementById('verhuurder_telefoon').value = get(data, 'partijen.verhuurder.telefoon');
+            document.getElementById('verhuurder_email').value = get(data, 'partijen.verhuurder.email');
+
+            // Huurder
+            document.getElementById('huurder_naam').value = get(data, 'partijen.huurder.naam') || get(data, 'partijen.huurder');
+            document.getElementById('huurder_adres').value = get(data, 'partijen.huurder.adres');
+            document.getElementById('huurder_telefoon').value = get(data, 'partijen.huurder.telefoon');
+            document.getElementById('huurder_email').value = get(data, 'partijen.huurder.email');
+
+            // Pand
+            document.getElementById('pand_adres').value = get(data, 'pand.adres') || get(data, 'onderwerp.adres');
+            document.getElementById('pand_type').value = get(data, 'pand.type');
+            document.getElementById('pand_oppervlakte').value = get(data, 'pand.oppervlakte');
+            document.getElementById('pand_kamers').value = get(data, 'pand.aantal_kamers');
+            document.getElementById('pand_verdieping').value = get(data, 'pand.verdieping');
+
+            const epc = get(data, 'pand.epc');
+            if (typeof epc === 'object') {
+                document.getElementById('pand_epc').value = epc.energielabel || '';
+            } else {
+                document.getElementById('pand_epc').value = epc || '';
+            }
+
+            // Financieel
+            document.getElementById('huurprijs').value = get(data, 'financieel.huurprijs');
+
+            const waarborg = get(data, 'financieel.waarborg');
+            if (typeof waarborg === 'object') {
+                document.getElementById('waarborg').value = waarborg.bedrag || '';
+            } else {
+                document.getElementById('waarborg').value = waarborg || '';
+            }
+
+            document.getElementById('kosten').value = get(data, 'financieel.kosten');
+            document.getElementById('indexatie').value = get(data, 'financieel.indexatie');
+
+            // Periodes
+            document.getElementById('ingangsdatum').value = get(data, 'periodes.ingangsdatum');
+            document.getElementById('einddatum').value = get(data, 'periodes.einddatum');
+            document.getElementById('duur').value = get(data, 'periodes.duur');
+            document.getElementById('opzegtermijn').value = get(data, 'periodes.opzegtermijn');
+
+            // Voorwaarden
+            document.getElementById('huisdieren').value = get(data, 'voorwaarden.huisdieren');
+            document.getElementById('onderverhuur').value = get(data, 'voorwaarden.onderverhuur');
+
+            const voorwaardenObj = get(data, 'voorwaarden');
+            if (typeof voorwaardenObj === 'object') {
+                const extra = Object.entries(voorwaardenObj)
+                    .filter(([k, v]) => !['huisdieren', 'onderverhuur'].includes(k))
+                    .map(([k, v]) => `${k}: ${v}`)
+                    .join('\n');
+                document.getElementById('voorwaarden_extra').value = extra;
+            }
+
+            // Samenvatting
+            document.getElementById('summary').value = json.summary || '';
+        }
+
+        function clearForm() {
+            if (confirm('Weet je zeker dat je alle velden wilt legen?')) {
+                document.querySelectorAll('input, textarea').forEach(el => {
+                    if (el.id !== 'fileInput') el.value = '';
+                });
+                document.getElementById('confidence-info').innerHTML = '';
+                currentData = {};
+            }
+        }
+
+        function exportJSON() {
+            const data = {
+                document_type: document.getElementById('document_type').value,
+                datum: document.getElementById('datum').value,
+                partijen: {
+                    verhuurder: {
+                        naam: document.getElementById('verhuurder_naam').value,
+                        adres: document.getElementById('verhuurder_adres').value,
+                        telefoon: document.getElementById('verhuurder_telefoon').value,
+                        email: document.getElementById('verhuurder_email').value
+                    },
+                    huurder: {
+                        naam: document.getElementById('huurder_naam').value,
+                        adres: document.getElementById('huurder_adres').value,
+                        telefoon: document.getElementById('huurder_telefoon').value,
+                        email: document.getElementById('huurder_email').value
+                    }
+                },
+                pand: {
+                    adres: document.getElementById('pand_adres').value,
+                    type: document.getElementById('pand_type').value,
+                    oppervlakte: document.getElementById('pand_oppervlakte').value,
+                    aantal_kamers: document.getElementById('pand_kamers').value,
+                    verdieping: document.getElementById('pand_verdieping').value,
+                    epc: document.getElementById('pand_epc').value
+                },
+                financieel: {
+                    huurprijs: document.getElementById('huurprijs').value,
+                    waarborg: document.getElementById('waarborg').value,
+                    kosten: document.getElementById('kosten').value,
+                    indexatie: document.getElementById('indexatie').value
+                },
+                periodes: {
+                    ingangsdatum: document.getElementById('ingangsdatum').value,
+                    einddatum: document.getElementById('einddatum').value,
+                    duur: document.getElementById('duur').value,
+                    opzegtermijn: document.getElementById('opzegtermijn').value
+                },
+                voorwaarden: {
+                    huisdieren: document.getElementById('huisdieren').value,
+                    onderverhuur: document.getElementById('onderverhuur').value
+                }
+            };
+
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'contract_data_edited.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
