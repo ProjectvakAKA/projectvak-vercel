@@ -1,0 +1,7 @@
+dropbox
+pdfplumber
+PyMuPDF
+google-generativeai
+pdf2image
+pillow
+python-dotenv

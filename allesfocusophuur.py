@@ -1,0 +1,2324 @@
+"""
+SMART CONTRACT SYSTEM - COMPLETE & FIXED
+Fase 1: Organiseert PDFs automatisch met OCR support
+Fase 2: Analyseert huurcontracten en genereert JSON
+
+Installatievereisten:
+pip install dropbox pdfplumber PyMuPDF google-generativeai pdf2image pillow python-dotenv
+
+Op Mac/Linux: brew install poppler
+Op Windows: Download poppler en zet in PATH
+
+BELANGRIJK: Maak een .env bestand aan met alle credentials (zie .env.example)
+"""
+
+import dropbox
+import pdfplumber
+import fitz  # PyMuPDF
+import io
+import os
+import time
+import smtplib
+import json
+import base64
+import re
+from datetime import datetime, timedelta
+from google import genai
+from google.genai import types
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from typing import Any, Dict, List, Optional, Set, Tuple
+from pdf2image import convert_from_bytes
+from PIL import Image
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# ============================================================================
+# CONFIGURATIE - CREDENTIALS
+# ============================================================================
+# All credentials are loaded from .env file for security
+# Make sure to create a .env file with all required variables (see .env.example)
+
+# FASE 1: ORGANISEER (Full access SOURCE)
+APP_KEY_SOURCE_FULL = os.getenv('APP_KEY_SOURCE_FULL')
+APP_SECRET_SOURCE_FULL = os.getenv('APP_SECRET_SOURCE_FULL')
+REFRESH_TOKEN_SOURCE_FULL = os.getenv('REFRESH_TOKEN_SOURCE_FULL')
+GEMINI_API_KEY_ORGANIZE = os.getenv('GEMINI_API_KEY_ORGANIZE')
+
+# FASE 2: ANALYSEER (Read-only SOURCE)
+APP_KEY_SOURCE_RO = os.getenv('APP_KEY_SOURCE_RO')
+APP_SECRET_SOURCE_RO = os.getenv('APP_SECRET_SOURCE_RO')
+REFRESH_TOKEN_SOURCE_RO = os.getenv('REFRESH_TOKEN_SOURCE_RO')
+GEMINI_API_KEY_ANALYZE = os.getenv('GEMINI_API_KEY_ANALYZE')
+
+# TARGET (JSON storage)
+APP_KEY_TARGET = os.getenv('APP_KEY_TARGET')
+APP_SECRET_TARGET = os.getenv('APP_SECRET_TARGET')
+REFRESH_TOKEN_TARGET = os.getenv('REFRESH_TOKEN_TARGET')
+
+# EMAIL
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SENDER_EMAIL = os.getenv('SENDER_EMAIL')
+SENDER_PASSWORD = os.getenv('SENDER_PASSWORD')
+RECIPIENT_EMAIL = [os.getenv('RECIPIENT_EMAIL', '')]
+
+# ============================================================================
+# CONFIGURATIE - SETTINGS
+# ============================================================================
+
+ORGANIZED_FOLDER_PREFIX = '/Georganiseerd'
+SCAN_ROOT = ''
+CHECK_INTERVAL = 20
+BATCH_SIZE = 5
+
+# History files
+ORGANIZED_HISTORY = "organized_history.txt"
+ANALYZED_HISTORY = "analyzed_docs.txt"
+FOLDER_CACHE = "folder_structure.json"
+
+# CSV log in TARGET
+CSV_LOG_PATH = "/verwerking_log.csv"
+
+# Retry settings
+MAX_RETRIES = 3
+RETRY_WAIT = 15
+RATE_LIMIT_WAIT = 90
+QUOTA_EXCEEDED_WAIT = 3600
+
+# Confidence target
+TARGET_CONFIDENCE = 95
+
+# Folders to exclude from organizing
+EXCLUDE_FOLDERS = {
+    '/Camera Uploads',
+    '/.dropbox',
+    '/Apps',
+    ORGANIZED_FOLDER_PREFIX
+}
+
+# Keywords for rental contract folders
+RENTAL_KEYWORDS = [
+    'huur', 'verhuur', 'rental', 'lease',
+    'huurcontract', 'huurovereenkomst'
+]
+
+
+# ============================================================================
+# ENHANCED CONTRACT NORMALIZER
+# ============================================================================
+
+class ContractNormalizer:
+    """Normalizer that outputs format matching website requirements"""
+
+    def normalize(self, raw_data: dict) -> dict:
+        """Returns contract_data structure"""
+        try:
+            contract_data = self._unwrap_data(raw_data)
+            if "error" in contract_data:
+                return {"error": contract_data["error"]}
+
+            return {
+                "contract_type": self._normalize_contract_type(contract_data),
+                "datum_contract": self._normalize_datum(contract_data),
+                "partijen": self._normalize_partijen_flat(contract_data),
+                "pand": self._normalize_pand_flat(contract_data),
+                "financieel": self._normalize_financieel_flat(contract_data),
+                "periodes": self._normalize_periodes_flat(contract_data),
+                "voorwaarden": self._normalize_voorwaarden_flat(contract_data),
+                "juridisch": self._normalize_juridisch_flat(contract_data)
+            }
+        except Exception as e:
+            return {"error": f"Normalization failed: {str(e)}"}
+
+    def _unwrap_data(self, raw_data: dict) -> dict:
+        return raw_data.get('contract_data') or raw_data.get('data') or raw_data.get('extracted_data') or raw_data
+
+    def _safe_get(self, obj: Any, *keys: str, default: Any = None) -> Any:
+        for key in keys:
+            if isinstance(obj, dict):
+                obj = obj.get(key)
+            else:
+                return default
+            if obj is None:
+                return default
+        return obj if obj != "" else default
+
+    def _extract_number(self, value: Any) -> Optional[float]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            clean = re.sub(r'[€$£\s]', '', value).replace(',', '.')
+            match = re.search(r'[\d.]+', clean)
+            if match:
+                try:
+                    return float(match.group(0))
+                except ValueError:
+                    pass
+        return None
+
+    def _normalize_boolean(self, value: Any) -> Optional[bool]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lower = value.lower().strip()
+            if lower in ['true', 'ja', 'yes', 'toegestaan', '1']:
+                return True
+            if lower in ['false', 'nee', 'no', 'verboden', '0']:
+                return False
+        return None
+
+    def _normalize_date(self, value: Any) -> Optional[str]:
+        """Returns date in YYYY-MM-DD format"""
+        if not value or value == "N/A":
+            return None
+        if isinstance(value, str):
+            for fmt in ['%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%Y/%m/%d']:
+                try:
+                    dt = datetime.strptime(value.strip(), fmt)
+                    return dt.strftime('%Y-%m-%d')
+                except ValueError:
+                    continue
+        return str(value) if value else None
+
+    def _normalize_contract_type(self, data: dict) -> str:
+        ct = self._safe_get(data, 'contract_type') or self._safe_get(data, 'document_type') or self._safe_get(data, 'type')
+        return ct.lower() if ct else 'huurovereenkomst'
+
+    def _normalize_datum(self, data: dict) -> Optional[str]:
+        date_value = self._safe_get(data, 'datum_contract') or self._safe_get(data, 'datum') or self._safe_get(data, 'contract_datum')
+        return self._normalize_date(date_value)
+
+    def _normalize_partijen_flat(self, data: dict) -> dict:
+        """Returns flat partijen matching document 2: verhuurder + single huurder object"""
+        partijen_data = self._safe_get(data, 'partijen', default={})
+
+        # Verhuurder
+        verhuurder = self._safe_get(partijen_data, 'verhuurder', default={})
+        if isinstance(verhuurder, str):
+            verhuurder = {"naam": verhuurder}
+
+        # Collect all huurders
+        huurders_list = []
+        if 'huurders' in partijen_data and isinstance(partijen_data['huurders'], list):
+            huurders_list = partijen_data['huurders']
+        elif 'huurder' in partijen_data:
+            h = partijen_data['huurder']
+            if isinstance(h, dict):
+                huurders_list = [h]
+            elif isinstance(h, str):
+                huurders_list = [{"naam": h}]
+
+        # Combine names and use first huurder's contact details
+        huurder_namen = []
+        first_huurder = {}
+        for h in huurders_list:
+            if isinstance(h, dict):
+                naam = self._safe_get(h, 'naam')
+                if naam:
+                    huurder_namen.append(naam)
+                if not first_huurder:
+                    first_huurder = h
+
+        combined_naam = " & ".join(huurder_namen) if huurder_namen else ""
+
+        return {
+            "verhuurder": {
+                "naam": self._safe_get(verhuurder, 'naam') or "",
+                "adres": self._safe_get(verhuurder, 'adres') or self._safe_get(verhuurder, 'zetel') or "",
+                "telefoon": self._safe_get(verhuurder, 'telefoon') or "",
+                "email": self._safe_get(verhuurder, 'email') or self._safe_get(verhuurder, 'e-mail') or ""
+            },
+            "huurder": {
+                "naam": combined_naam or "",
+                "adres": self._safe_get(first_huurder, 'adres') or self._safe_get(first_huurder, 'woonplaats') or "",
+                "telefoon": self._safe_get(first_huurder, 'telefoon') or self._safe_get(first_huurder, 'gsm') or "",
+                "email": self._safe_get(first_huurder, 'email') or self._safe_get(first_huurder, 'e-mail') or ""
+            }
+        }
+
+    def _normalize_pand_flat(self, data: dict) -> dict:
+        """Returns flat pand"""
+        pand = self._safe_get(data, 'pand') or self._safe_get(data, 'onderwerp') or {}
+
+        # Extract address as simple string
+        adres_raw = self._safe_get(pand, 'adres', default={})
+        if isinstance(adres_raw, dict):
+            volledig = self._safe_get(adres_raw, 'volledig_adres') or self._safe_get(adres_raw, 'volledig')
+            if not volledig:
+                parts = []
+                straat = self._safe_get(adres_raw, 'straat')
+                nummer = self._safe_get(adres_raw, 'nummer')
+                if straat or nummer:
+                    parts.append(f"{straat or ''} {nummer or ''}".strip())
+                postcode = self._safe_get(adres_raw, 'postcode')
+                stad = self._safe_get(adres_raw, 'stad')
+                if postcode or stad:
+                    parts.append(f"{postcode or ''} {stad or ''}".strip())
+                volledig = ", ".join(parts) if parts else ""
+            adres_str = volledig
+        else:
+            adres_str = str(adres_raw) if adres_raw else ""
+
+        # EPC
+        epc_data = self._safe_get(pand, 'epc') or {}
+        if isinstance(epc_data, str):
+            epc_data = {"label": epc_data}
+
+        # Kadaster
+        kadaster = self._safe_get(pand, 'kadaster') or {}
+        ki = self._extract_number(self._safe_get(kadaster, 'kadastraal_inkomen') or self._safe_get(kadaster, 'ki'))
+
+        return {
+            "adres": adres_str,
+            "type": self._safe_get(pand, 'type') or self._safe_get(pand, 'type_woning') or "appartement",
+            "oppervlakte": self._extract_number(self._safe_get(pand, 'oppervlakte') or self._safe_get(pand, 'totale_bewoonbare_oppervlakte')),
+            "aantal_kamers": self._extract_number(self._safe_get(pand, 'aantal_kamers') or self._safe_get(pand, 'kamers')),
+            "verdieping": self._extract_number(self._safe_get(pand, 'verdieping')),
+            "epc": {
+                "energielabel": self._safe_get(epc_data, 'energielabel') or self._safe_get(epc_data, 'label') or "",
+                "certificaatnummer": self._safe_get(epc_data, 'certificaatnummer') or self._safe_get(epc_data, 'nummer') or ""
+            },
+            "kadaster": {
+                "afdeling": self._safe_get(kadaster, 'afdeling') or "",
+                "sectie": self._safe_get(kadaster, 'sectie') or "",
+                "nummer": self._safe_get(kadaster, 'nummer') or self._safe_get(kadaster, 'perceelnummer') or "",
+                "kadastraal_inkomen": ki
+            }
+        }
+
+    def _normalize_financieel_flat(self, data: dict) -> dict:
+        """Returns flat financieel"""
+        financieel = self._safe_get(data, 'financieel', default={})
+
+        # Huurprijs
+        huurprijs_raw = self._safe_get(financieel, 'huurprijs') or self._safe_get(financieel, 'maandelijkse_huurprijs')
+        if isinstance(huurprijs_raw, dict):
+            huurprijs_raw = self._safe_get(huurprijs_raw, 'bedrag')
+        huurprijs = self._extract_number(huurprijs_raw)
+
+        # Waarborg
+        waarborg_raw = self._safe_get(financieel, 'waarborg') or self._safe_get(financieel, 'huurwaarborg') or {}
+        if isinstance(waarborg_raw, (int, float)):
+            waarborg_raw = {"bedrag": waarborg_raw}
+
+        waarborg_bedrag = self._extract_number(self._safe_get(waarborg_raw, 'bedrag'))
+
+        # Build waar_gedeponeerd string
+        waar_parts = []
+        bank = self._safe_get(waarborg_raw, 'bank_naam') or self._safe_get(waarborg_raw, 'bank')
+        iban = self._safe_get(waarborg_raw, 'iban')
+        waar_gedeponeerd_raw = self._safe_get(waarborg_raw, 'waar_gedeponeerd')
+
+        if waar_gedeponeerd_raw:
+            waar_gedeponeerd = waar_gedeponeerd_raw
+        elif bank or iban:
+            if bank:
+                waar_parts.append(bank)
+            if iban:
+                waar_parts.append(f"(rekening {iban})")
+            waar_gedeponeerd = " ".join(waar_parts)
+        else:
+            waar_gedeponeerd = ""
+
+        # Kosten
+        kosten_raw = self._safe_get(financieel, 'kosten')
+        if kosten_raw:
+            kosten = str(kosten_raw)
+        else:
+            gem_kosten = self._safe_get(financieel, 'gemeenschappelijke_kosten', default={})
+            if isinstance(gem_kosten, dict):
+                inbegrepen_items = self._safe_get(gem_kosten, 'inbegrepen', default=[])
+                if inbegrepen_items:
+                    items_text = []
+                    for item in inbegrepen_items:
+                        if isinstance(item, dict):
+                            post = self._safe_get(item, 'post')
+                            if post:
+                                items_text.append(post)
+                    if items_text:
+                        kosten = f"Gemeenschappelijke kosten ({', '.join(items_text)}) zijn inbegrepen in de huurprijs."
+                    else:
+                        kosten = "Gemeenschappelijke kosten inbegrepen."
+                else:
+                    kosten = ""
+            else:
+                kosten = ""
+
+        # Indexatie
+        indexatie = self._normalize_boolean(self._safe_get(financieel, 'indexatie') or self._safe_get(financieel, 'indexering'))
+
+        return {
+            "huurprijs": huurprijs,
+            "waarborg": {
+                "bedrag": waarborg_bedrag,
+                "waar_gedeponeerd": waar_gedeponeerd
+            },
+            "kosten": kosten,
+            "indexatie": indexatie
+        }
+
+    def _normalize_periodes_flat(self, data: dict) -> dict:
+        """Returns flat periodes"""
+        periodes = self._safe_get(data, 'periodes', default={})
+
+        ingangsdatum = self._normalize_date(
+            self._safe_get(periodes, 'ingangsdatum') or self._safe_get(periodes, 'aanvang') or self._safe_get(periodes, 'start')
+        )
+        einddatum = self._normalize_date(
+            self._safe_get(periodes, 'einddatum') or self._safe_get(periodes, 'einde')
+        )
+
+        duur = self._safe_get(periodes, 'duur') or self._safe_get(periodes, 'contract_type_duur') or self._safe_get(periodes, 'looptijd') or ""
+
+        opzegtermijn_raw = self._safe_get(periodes, 'opzegtermijn')
+        opzegtermijn_huurder = self._safe_get(periodes, 'opzegtermijn_huurder')
+        opzegtermijn_verhuurder = self._safe_get(periodes, 'opzegtermijn_verhuurder')
+
+        if opzegtermijn_raw:
+            opzegtermijn = str(opzegtermijn_raw)
+        else:
+            parts = []
+            if opzegtermijn_huurder:
+                parts.append(f"{opzegtermijn_huurder} (huurder)")
+            if opzegtermijn_verhuurder:
+                parts.append(f"{opzegtermijn_verhuurder} (verhuurder)")
+            opzegtermijn = "; ".join(parts) if parts else ""
+
+        return {
+            "ingangsdatum": ingangsdatum,
+            "einddatum": einddatum,
+            "duur": duur,
+            "opzegtermijn": opzegtermijn
+        }
+
+    def _normalize_voorwaarden_flat(self, data: dict) -> dict:
+        """Returns flat voorwaarden"""
+        voorwaarden = self._safe_get(data, 'voorwaarden', default={})
+
+        huisdieren_raw = self._safe_get(voorwaarden, 'huisdieren')
+        if isinstance(huisdieren_raw, dict):
+            huisdieren = self._normalize_boolean(self._safe_get(huisdieren_raw, 'toegestaan'))
+        else:
+            huisdieren = self._normalize_boolean(huisdieren_raw)
+
+        onderverhuur = self._normalize_boolean(self._safe_get(voorwaarden, 'onderverhuur'))
+        werken = self._safe_get(voorwaarden, 'werken') or ""
+
+        return {
+            "huisdieren": huisdieren,
+            "onderverhuur": onderverhuur,
+            "werken": werken
+        }
+
+    def _normalize_juridisch_flat(self, data: dict) -> dict:
+        """Returns flat juridisch"""
+        juridisch = self._safe_get(data, 'juridisch', default={})
+
+        return {
+            "toepasselijk_recht": self._safe_get(juridisch, 'toepasselijk_recht') or "",
+            "bevoegde_rechtbank": self._safe_get(juridisch, 'bevoegde_rechtbank') or ""
+        }
+
+
+normalizer = ContractNormalizer()
+
+
+# ============================================================================
+# FOLDER MANAGER
+# ============================================================================
+
+class FolderManager:
+    """Manages dynamic folder structure"""
+
+    def __init__(self, dbx):
+        self.dbx = dbx
+        self.folders = self.load_cache()
+
+    def load_cache(self) -> Dict[str, dict]:
+        """Load existing folder structure"""
+        try:
+            with open(FOLDER_CACHE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def save_cache(self):
+        """Save folder structure"""
+        try:
+            with open(FOLDER_CACHE, 'w', encoding='utf-8') as f:
+                json.dump(self.folders, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️  Cache save failed: {e}")
+
+    def scan_organized_folders(self) -> List[Dict[str, str]]:
+        """Scan only organized folders for AI context"""
+        existing = []
+
+        try:
+            # Check if main folder exists
+            try:
+                self.dbx.files_get_metadata(ORGANIZED_FOLDER_PREFIX)
+            except dropbox.exceptions.ApiError:
+                return []
+
+            result = self.dbx.files_list_folder(ORGANIZED_FOLDER_PREFIX, recursive=True)
+
+            while True:
+                for entry in result.entries:
+                    if isinstance(entry, dropbox.files.FolderMetadata):
+                        path = entry.path_display
+                        name = entry.name
+
+                        try:
+                            folder_contents = self.dbx.files_list_folder(path)
+                            file_count = sum(1 for e in folder_contents.entries
+                                           if isinstance(e, dropbox.files.FileMetadata))
+                        except:
+                            file_count = 0
+
+                        existing.append({
+                            'path': path,
+                            'name': name,
+                            'file_count': file_count
+                        })
+
+                        if path not in self.folders:
+                            self.folders[path] = {
+                                'name': name,
+                                'created': datetime.now().isoformat(),
+                                'description': 'Auto-detected',
+                                'file_count': file_count
+                            }
+
+                if not result.has_more:
+                    break
+                result = self.dbx.files_list_folder_continue(result.cursor)
+
+        except Exception as e:
+            print(f"⚠️  Scan error: {e}")
+
+        self.save_cache()
+        return existing
+
+    def sanitize_folder_path(self, path: str) -> str:
+        """Make folder path safe"""
+        path = path.strip()
+
+        if path.startswith(ORGANIZED_FOLDER_PREFIX):
+            path = path[len(ORGANIZED_FOLDER_PREFIX):]
+
+        if not path.startswith('/'):
+            path = '/' + path
+
+        parts = path.split('/')
+        cleaned_parts = []
+
+        for part in parts:
+            if not part:
+                continue
+            part = re.sub(r'[^\w\s-]', '', part)
+            part = re.sub(r'\s+', '_', part)
+            part = re.sub(r'_+', '_', part)
+            part = part.strip('_')
+
+            if part:
+                cleaned_parts.append(part)
+
+        if cleaned_parts:
+            return ORGANIZED_FOLDER_PREFIX + '/' + '/'.join(cleaned_parts)
+        else:
+            return ORGANIZED_FOLDER_PREFIX + '/Overig'
+
+    def create_folder(self, folder_path: str, description: str = "") -> bool:
+        """Create new folder (with parent folders)"""
+        try:
+            folder_path = self.sanitize_folder_path(folder_path)
+
+            parts = folder_path.split('/')[1:]
+            current_path = ''
+
+            for part in parts:
+                current_path += '/' + part
+
+                try:
+                    self.dbx.files_get_metadata(current_path)
+                except dropbox.exceptions.ApiError as e:
+                    if e.error.is_path() and e.error.get_path().is_not_found():
+                        try:
+                            self.dbx.files_create_folder_v2(current_path)
+                            print(f"📁 Folder created: {current_path}")
+                        except dropbox.exceptions.ApiError as create_error:
+                            if not (create_error.error.is_path() and
+                                  create_error.error.get_path().is_conflict()):
+                                raise
+
+            if folder_path not in self.folders:
+                self.folders[folder_path] = {
+                    'name': folder_path.split('/')[-1],
+                    'created': datetime.now().isoformat(),
+                    'description': description,
+                    'file_count': 0
+                }
+                self.save_cache()
+                print(f"   Description: {description}")
+
+            return True
+
+        except Exception as e:
+            print(f"❌ Folder creation error: {e}")
+            return False
+
+    def get_folder_summary(self) -> str:
+        """Create summary for AI"""
+        if not self.folders:
+            return "No existing organized folders."
+
+        summary = []
+        for path, info in sorted(self.folders.items()):
+            relative_path = path.replace(ORGANIZED_FOLDER_PREFIX, '')
+            desc = info.get('description', 'no description')
+            count = info.get('file_count', 0)
+            summary.append(f"- {relative_path}: {desc} ({count} file(s))")
+
+        return "\n".join(summary[:15])
+
+
+# ============================================================================
+# UTILITIES
+# ============================================================================
+
+def format_file_size(size_bytes):
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} TB"
+
+
+def load_history(filename):
+    """Load processed files from history"""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            return set(line.strip() for line in f if line.strip())
+    except FileNotFoundError:
+        return set()
+
+
+def add_to_history(filename, path):
+    """Add file to history"""
+    try:
+        with open(filename, 'a', encoding='utf-8') as f:
+            f.write(f"{path}\n")
+    except Exception as e:
+        print(f"⚠️  History update failed: {e}")
+
+
+def is_quota_error(error_msg):
+    error_str = str(error_msg).lower()
+    return "429" in error_str or "quota" in error_str or "resource_exhausted" in error_str
+
+
+def send_email(subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = ', '.join(RECIPIENT_EMAIL)
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+        print(f"✉️  Email sent")
+        return True
+    except Exception as e:
+        print(f"❌ Email error: {e}")
+        return False
+
+
+# ============================================================================
+# CSV LOGGING
+# ============================================================================
+
+def ensure_csv_exists(dbx_target):
+    try:
+        dbx_target.files_get_metadata(CSV_LOG_PATH)
+        return True
+    except dropbox.exceptions.ApiError as e:
+        if e.error.is_path() and e.error.get_path().is_not_found():
+            header = 'timestamp,filename,document_type,confidence_score,needs_review,text_length,fields_complete,issues,warnings,json_path,processing_status\n'
+            try:
+                dbx_target.files_upload(header.encode('utf-8'), CSV_LOG_PATH, mode=dropbox.files.WriteMode.overwrite)
+                print("📊 CSV log created")
+                return True
+            except Exception as ex:
+                print(f"❌ CSV creation error: {ex}")
+                return False
+        else:
+            print(f"❌ CSV check error: {e}")
+            return False
+
+
+def log_to_csv(dbx_target, filename, result, json_path, status="success"):
+    try:
+        if not ensure_csv_exists(dbx_target):
+            print("⚠️  Cannot find/create CSV - skipping logging")
+            return False
+
+        try:
+            _, response = dbx_target.files_download(CSV_LOG_PATH)
+            current_csv = response.content.decode('utf-8')
+        except Exception as e:
+            print(f"❌ CSV download error: {e}")
+            return False
+
+        conf = result.get('confidence', {})
+        new_row = [
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            filename,
+            result.get('title', 'Unknown'),
+            str(conf.get('score', 0)),
+            'Yes' if conf.get('needs_review', True) else 'No',
+            str(conf.get('metrics', {}).get('text_length', 0)),
+            f"{conf.get('metrics', {}).get('completeness', 0):.0%}",
+            '; '.join(conf.get('issues', [])) or 'None',
+            '; '.join(conf.get('warnings', [])) or 'None',
+            json_path or '',
+            status
+        ]
+        new_row = [f'"{str(field).replace('"', '""')}"' for field in new_row]
+        new_line = ','.join(new_row) + '\n'
+        updated_csv = current_csv + new_line
+        dbx_target.files_upload(updated_csv.encode('utf-8'), CSV_LOG_PATH, mode=dropbox.files.WriteMode.overwrite)
+        return True
+    except Exception as e:
+        print(f"❌ CSV logging error: {e}")
+        return False
+
+
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
+
+def init_clients():
+    """Initialize all Dropbox and Gemini clients"""
+    try:
+        # Gemini clients first
+        client_organize = genai.Client(api_key=GEMINI_API_KEY_ORGANIZE)
+        client_analyze = genai.Client(api_key=GEMINI_API_KEY_ANALYZE)
+
+        # Dynamically select best available model
+        all_models = client_organize.models.list()
+        generative_models = []
+        for m in all_models:
+            model_name = m.name.replace('models/', '')
+            if 'gemini' in model_name.lower() and 'embedding' not in model_name.lower():
+                generative_models.append(model_name)
+
+        print(f"Beschikbare modellen: {generative_models}")
+
+        # Preferred models (stable, geen experimental!)
+        preferred_models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        model_id = None
+        for pref in preferred_models:
+            if pref in generative_models:
+                model_id = pref
+                break
+
+        if not model_id and generative_models:
+            model_id = generative_models[0]
+
+        if not model_id:
+            model_id = 'gemini-1.5-flash-latest'
+
+        # Use same model for both
+        model_organize = model_id
+        model_analyze = model_id
+
+        # Dropbox clients
+        dbx_organize = dropbox.Dropbox(
+            app_key=APP_KEY_SOURCE_FULL,
+            app_secret=APP_SECRET_SOURCE_FULL,
+            oauth2_refresh_token=REFRESH_TOKEN_SOURCE_FULL
+        )
+
+        dbx_analyze = dropbox.Dropbox(
+            app_key=APP_KEY_SOURCE_RO,
+            app_secret=APP_SECRET_SOURCE_RO,
+            oauth2_refresh_token=REFRESH_TOKEN_SOURCE_RO
+        )
+
+        dbx_target = dropbox.Dropbox(
+            app_key=APP_KEY_TARGET,
+            app_secret=APP_SECRET_TARGET,
+            oauth2_refresh_token=REFRESH_TOKEN_TARGET
+        )
+
+        # Verify connections
+        account_org = dbx_organize.users_get_current_account()
+        print(f"✅ Dropbox Organize: {account_org.name.display_name}")
+
+        account_ana = dbx_analyze.users_get_current_account()
+        print(f"✅ Dropbox Analyze: {account_ana.name.display_name}")
+
+        account_tgt = dbx_target.users_get_current_account()
+        print(f"✅ Dropbox Target: {account_tgt.name.display_name}")
+
+        print(f"✅ Gemini Organize: {model_organize}")
+        print(f"✅ Gemini Analyze: {model_analyze}")
+
+        # Ensure organized folder exists
+        try:
+            dbx_organize.files_get_metadata(ORGANIZED_FOLDER_PREFIX)
+        except dropbox.exceptions.ApiError:
+            dbx_organize.files_create_folder_v2(ORGANIZED_FOLDER_PREFIX)
+            print(f"📁 Created {ORGANIZED_FOLDER_PREFIX}")
+
+        # Ensure CSV exists
+        ensure_csv_exists(dbx_target)
+
+        return {
+            'dbx_organize': dbx_organize,
+            'dbx_analyze': dbx_analyze,
+            'dbx_target': dbx_target,
+            'gemini_organize': client_organize,
+            'gemini_analyze': client_analyze,
+            'model_organize': model_organize,
+            'model_analyze': model_analyze
+        }
+
+    except Exception as e:
+        print(f"❌ Initialization error: {e}")
+        return None
+
+
+# ============================================================================
+# PDF TEXT EXTRACTION WITH OCR
+# ============================================================================
+
+def extract_text_with_ocr(pdf_bytes, gemini_client, model, initial_pages=5) -> Tuple[str, dict]:
+    """Extract text from PDF with OCR fallback for scanned documents"""
+    try:
+        full_text = ""
+        total_pages = 0
+        pages_scanned = 0
+        extraction_method = "text"
+
+        # Phase 1: Try normal text extraction
+        with io.BytesIO(pdf_bytes) as pdf_file:
+            with pdfplumber.open(pdf_file) as pdf:
+                total_pages = len(pdf.pages)
+                pages_to_scan = min(initial_pages, total_pages)
+
+                for i in range(pages_to_scan):
+                    try:
+                        page_text = pdf.pages[i].extract_text() or ""
+                        full_text += page_text + "\n"
+                        pages_scanned += 1
+                    except Exception:
+                        continue
+
+        cleaned_text = ' '.join(full_text.split())
+
+        # Check if we have enough text - if not, use OCR
+        if len(cleaned_text) < 200 and total_pages > 0:
+            print(f"   ⚠️  Little text found ({len(cleaned_text)} chars)")
+            print(f"   📸 Scanned document detected - using OCR...")
+
+            extraction_method = "ocr"
+
+            try:
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                image_data = []
+
+                pages_to_ocr = min(3, total_pages)
+                for page_num in range(pages_to_ocr):
+                    page = doc[page_num]
+                    # Convert page to image at 200 DPI
+                    pix = page.get_pixmap(dpi=200)
+                    # Get PNG bytes
+                    img_bytes = pix.tobytes("png")
+                    image_data.append(img_bytes)
+
+                doc.close()
+
+                print(f"   🔍 Running OCR on {len(image_data)} page(s)...")
+
+                ocr_text = extract_text_vision(image_data, gemini_client, model)
+
+                if ocr_text and len(ocr_text) > 100:
+                    cleaned_text = ocr_text
+                    print(f"   ✓ OCR successful: {len(cleaned_text)} characters")
+                else:
+                    print(f"   ⚠️  OCR yielded little text")
+
+            except Exception as ocr_error:
+                print(f"   ❌ OCR error: {ocr_error}")
+
+        # Smart extra scanning
+        need_more = False
+        if len(cleaned_text) < 500:
+            need_more = True
+        elif extraction_method == "text":
+            generic_words = ['voorblad', 'inhoudsopgave', 'inhoud', 'index']
+            if any(word in cleaned_text.lower() for word in generic_words) and len(cleaned_text) < 1000:
+                need_more = True
+
+        if need_more and total_pages > initial_pages and extraction_method == "text":
+            print(f"   📖 Scanning extra pages...")
+
+            with io.BytesIO(pdf_bytes) as pdf_file:
+                with pdfplumber.open(pdf_file) as pdf:
+                    max_scan = min(15, total_pages)
+                    for i in range(initial_pages, max_scan):
+                        try:
+                            page_text = pdf.pages[i].extract_text() or ""
+                            full_text += page_text + "\n"
+                            pages_scanned += 1
+
+                            if i % 3 == 0:
+                                temp = ' '.join(full_text.split())
+                                if len(temp) > 1000:
+                                    break
+                        except Exception:
+                            continue
+
+            cleaned_text = ' '.join(full_text.split())
+
+        metadata = {
+            'total_pages': total_pages,
+            'pages_scanned': pages_scanned,
+            'text_length': len(cleaned_text),
+            'extraction_method': extraction_method
+        }
+
+        return cleaned_text, metadata
+
+    except Exception as e:
+        print(f"⚠️  Extraction error: {e}")
+        return "", {'error': str(e)}
+def extract_text_vision(images: List[bytes], gemini_client, model) -> str:
+    """Extract text from images with Gemini Vision API"""
+    try:
+        prompt = "Extract ALL text from these images. Include handwritten text if present. Return ONLY the extracted text, no explanations."
+
+        # ✅ FIXED: Just use string directly, not wrapped in Part
+        parts = [prompt]
+
+        for img_bytes in images:
+            parts.append(types.Part.from_bytes(
+                data=img_bytes,
+                mime_type="image/png"
+            ))
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = gemini_client.models.generate_content(
+                    model=model,
+                    contents=parts
+                )
+                return response.text
+
+            except Exception as e:
+                if "429" in str(e) and attempt < MAX_RETRIES - 1:
+                    print(f"   Rate limit - waiting {RATE_LIMIT_WAIT}s...")
+                    time.sleep(RATE_LIMIT_WAIT)
+                else:
+                    raise
+
+        return ""
+
+    except Exception as e:
+        print(f"   Vision OCR error: {e}")
+        return ""
+
+# ============================================================================
+# PHASE 1: SMART CLASSIFICATION
+# ============================================================================
+
+def smart_classify(text: str, filename: str, current_location: str,
+                   existing_folders: str, gemini_client, model, pdf_metadata: dict) -> Optional[Dict]:
+    """AI decides folder structure with STRICT differentiation"""
+
+    text_sample = text[:3500] if len(text) > 3500 else text
+
+    extraction_method = pdf_metadata.get('extraction_method', 'text')
+    method_note = " (OCR used)" if extraction_method == "ocr" else ""
+
+    prompt = f"""SYSTEM: Je bent een EXPERT documentclassificeerder die ZEER SPECIFIEK onderscheid maakt tussen documentsoorten.
+
+CRITICAL: Je moet 100% ZEKER zijn van de classificatie. Bij twijfel → maak NIEUWE folder.
+
+FILENAME: {filename}
+LOCATION: {current_location}
+EXTRACTION: {pdf_metadata.get('pages_scanned', '?')}/{pdf_metadata.get('total_pages', '?')} pages{method_note}
+
+EXISTING FOLDERS:
+{existing_folders if existing_folders else "First document - no folders yet."}
+
+DOCUMENT TEXT:
+{text_sample}
+
+═══════════════════════════════════════════════════════════════════
+STRIKTE CLASSIFICATIE REGELS - LEES DIT HEEL AANDACHTIG
+═══════════════════════════════════════════════════════════════════
+
+1. TAAL IDENTIFICATIE (HOOGSTE PRIORITEIT):
+   - Frans document → NOOIT in Nederlandse folders
+   - Nederlands document → NOOIT in Franse folders  
+   - Engels document → Aparte Engelse folder
+   - Check eerste 20 woorden voor taal detectie
+   - Taal is 100% bepalend, zelfs bij gelijkaardig onderwerp
+
+2. HUURCONTRACT vs ANDERE CONTRACTEN (KRITIEK):
+
+   Een document is ALLEEN huurcontract als ALLE volgende aanwezig zijn:
+   ✓ Woorden: "huur", "verhuur", "huurprijs", "huurder", "verhuurder"
+   ✓ Maandelijkse betalingen vermeld
+   ✓ Adres van TE HUREN pand
+   ✓ Ingangsdatum huurperiode
+   ✓ Huurwaarborg of waarborg
+
+   Als ÉÉN van bovenstaande ontbreekt → GEEN huurcontract!
+
+   Veelvoorkomende NIET-huurcontracten:
+   - EPC certificaat → /Documenten/EPC (heeft adres MAAR geen huurprijs!)
+   - Verzekering → /Contracten/Verzekeringen (heeft maandprijs MAAR geen huur)
+   - Arbeidscontract → /Contracten/Werk (heeft salaris MAAR geen pand)
+   - Koop/verkoop → /Contracten/Verkoop (heeft pand MAAR geen huur)
+   - Energie contract → /Contracten/Energie (heeft adres MAAR geen verhuurder)
+
+3. ONDERSCHEID BINNEN DOCUMENTEN:
+
+   Factuur vs Contract:
+   - Factuur = éénmalige betaling, factuurnummer, vervaldatum
+   - Contract = doorlopende overeenkomst, looptijd, partijen
+
+   Certificaat vs Contract:
+   - Certificaat = attest, goedkeuring, geen betalingen
+   - Contract = afspraken, verplichtingen, betalingen
+
+4. VAKGEBIED HERKENNING (voor studie/werk documenten):
+
+   - Frans lesmateriaal → /Studies/Frans (NIET /Studies/Economie ook al gaat het OVER economie)
+   - Wiskunde in Engels → /Studies/Mathematics (taal bepaalt!)
+   - Bedrijfskunde presentatie → /Studies/Bedrijfskunde
+   - Geschiedenis samenvatting → /Studies/Geschiedenis
+
+   Test: Als je de tekst NIET kan lezen zonder die taal te kennen → classificeer op TAAL
+
+5. SPECIFICITEIT VEREISTEN:
+
+   - Confidence moet 95+ zijn voor bestaande folder
+   - Bij twijfel tussen 2 folders → maak NIEUWE specifiekere folder
+   - Beter te specifiek dan te algemeen
+   - Geef altijd EXACTE reden waarom je voor deze folder koos
+
+6. VOORBEELD CLASSIFICATIES:
+
+   ✓ CORRECT:
+   "Ce document contient des informations sur..." → /Documenten/Frans
+   "EPC certificaat voor Kerkstraat 10" → /Documenten/EPC  
+   "Huurcontract Kerkstraat 10, huurprijs €1200/maand" → /Huurcontracten
+   "Polis BA verzekering" → /Contracten/Verzekeringen
+
+   ✗ FOUT:
+   "Cours d'économie" → /Studies/Economie (MOET /Studies/Frans zijn!)
+   "EPC Kerkstraat 10" → /Huurcontracten (GEEN huurprijs = GEEN huur!)
+   "Electriciteitscontract Kerkstraat 10" → /Huurcontracten (Energie contract!)
+
+═══════════════════════════════════════════════════════════════════
+
+ANTWOORD FORMAT (ALLEEN JSON, geen tekst ervoor/erna):
+
+Voor BESTAANDE folder (alleen als 95%+ zeker):
+{{
+  "action": "existing",
+  "folder_path": "/Huurcontracten",
+  "confidence": 98,
+  "reasoning": "Nederlands huurcontract: bevat huurprijs (€1200), verhuurder (Jan Peeters), huurder naam, adres Kerkstraat 10, ingangsdatum, waarborg",
+  "description": "Huurcontracten"
+}}
+
+Voor NIEUWE folder (bij twijfel of nieuwe categorie):
+{{
+  "action": "new", 
+  "folder_path": "/Documenten/EPC",
+  "confidence": 100,
+  "reasoning": "EPC energiecertificaat: bevat energielabel, geen huurprijs, geen verhuurder, wel adres maar dit is certificaat geen contract",
+  "description": "EPC energiecertificaten"
+}}
+
+CRITICAL CHECKS voor jouw antwoord:
+☐ Heb ik de TAAL correct geïdentificeerd?
+☐ Heb ik ALLE vereiste velden voor huurcontract gecontroleerd?
+☐ Is confidence 95+ of heb ik nieuwe folder gemaakt?
+☐ Klopt mijn reasoning met de feiten in de tekst?
+☐ Kan dit document in GEEN andere folder passen?
+
+JSON:"""
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = gemini_client.models.generate_content(
+                model=model,
+                contents=prompt
+            )
+
+            raw = response.text.strip()
+
+            # Try to extract JSON
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                # Method 2: Search JSON in code blocks
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
+                if json_match:
+                    raw = json_match.group(1)
+                else:
+                    # Method 3: Search first { to last }
+                    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw, re.DOTALL)
+                    if json_match:
+                        raw = json_match.group(0)
+
+                result = json.loads(raw)
+
+            # Validate result
+            required_fields = ['action', 'folder_path', 'confidence', 'reasoning']
+            if not all(field in result for field in required_fields):
+                raise ValueError(f"Missing fields: {[f for f in required_fields if f not in result]}")
+
+            if result['action'] not in ['existing', 'new']:
+                raise ValueError(f"Invalid action: {result['action']}")
+
+            # Clean folder path
+            folder_path = result['folder_path'].strip()
+            if not folder_path.startswith('/'):
+                folder_path = '/' + folder_path
+
+            result['folder_path'] = folder_path
+
+            return result
+
+        except json.JSONDecodeError as e:
+            print(f"   ⚠️  JSON parse error: {str(e)[:100]}")
+            if attempt < MAX_RETRIES - 1:
+                print(f"   ⏳ Retry in {RETRY_WAIT}s...")
+                time.sleep(RETRY_WAIT)
+                continue
+            else:
+                return None
+
+        except Exception as e:
+            error_str = str(e)
+
+            if "429" in error_str or "quota" in error_str.lower() or "resource_exhausted" in error_str.lower():
+                print(f"   ⚠️  Rate limit reached")
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = RATE_LIMIT_WAIT * (attempt + 1)
+                    print(f"   ⏳ Waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+
+            print(f"   ❌ Classification error: {str(e)[:100]}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_WAIT)
+                continue
+
+            return None
+
+    return None
+
+
+# ============================================================================
+# PHASE 1: ORGANIZE DOCUMENTS
+# ============================================================================
+
+def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
+    """Organize a batch of unorganized PDFs"""
+
+    dbx = clients['dbx_organize']
+    gemini = clients['gemini_organize']
+    model = clients['model_organize']
+
+    try:
+        # Find unorganized PDFs
+        unorganized = []
+
+        result = dbx.files_list_folder(SCAN_ROOT if SCAN_ROOT else '', recursive=False)
+
+        while True:
+            for entry in result.entries:
+                if isinstance(entry, dropbox.files.FileMetadata):
+                    if entry.name.lower().endswith('.pdf'):
+                        path = entry.path_display
+
+                        # Skip if already organized
+                        if path in organized_history:
+                            continue
+
+                        # Skip if in excluded folders
+                        skip = False
+                        for excluded in EXCLUDE_FOLDERS:
+                            if path.startswith(excluded):
+                                skip = True
+                                break
+
+                        if not skip:
+                            unorganized.append({
+                                'path': path,
+                                'name': entry.name,
+                                'size': entry.size
+                            })
+
+            if not result.has_more:
+                break
+            result = dbx.files_list_folder_continue(result.cursor)
+
+        if not unorganized:
+            return 0
+
+        # Process batch
+        batch = unorganized[:max_docs]
+        print(f"\n📦 Processing batch of {len(batch)} document(s)")
+
+        for i, pdf_info in enumerate(batch, 1):
+            try:
+                print(f"\n{'='*70}")
+                print(f"📄 [{i}/{len(batch)}] {pdf_info['name']}")
+                print(f"{'='*70}")
+
+                # Download
+                print(f"⬇️  Downloading...")
+                _, response = dbx.files_download(pdf_info['path'])
+
+                # Extract text
+                text, pdf_metadata = extract_text_with_ocr(response.content, gemini, model)
+
+                if not text or len(text) < 30:
+                    print(f"⚠️  Insufficient text ({len(text)} chars) - skipping")
+                    add_to_history(ORGANIZED_HISTORY, pdf_info['path'])
+                    continue
+
+                extraction_info = f"{pdf_metadata.get('extraction_method', 'text').upper()}"
+                print(f"✓ Text: {len(text)} chars via {extraction_info}")
+
+                # Scan folders
+                folder_mgr.scan_organized_folders()
+                folder_summary = folder_mgr.get_folder_summary()
+
+                # AI classification
+                print("🤖 AI analyzing document...")
+                result = smart_classify(text, pdf_info['name'], pdf_info['path'],
+                                      folder_summary, gemini, model, pdf_metadata)
+
+                if not result:
+                    print(f"❌ Classification failed - document stays where it is")
+                    continue
+
+                action = result['action']
+                folder_path = result['folder_path']
+                confidence = result['confidence']
+                reasoning = result['reasoning']
+
+                print(f"\n📊 AI DECISION:")
+                print(f"   Action: {action.upper()}")
+                print(f"   Folder: {folder_path}")
+                print(f"   Confidence: {confidence}%")
+                print(f"   Reason: {reasoning}")
+
+                # Create new folder if needed
+                if action == "new":
+                    description = result.get('description', reasoning)
+                    print(f"\n📁 Creating new folder...")
+                    if not folder_mgr.create_folder(folder_path, description):
+                        continue
+
+                # Move document
+                full_folder_path = folder_mgr.sanitize_folder_path(folder_path)
+                new_path = f"{full_folder_path}/{pdf_info['name']}"
+
+                print(f"\n📤 Moving...")
+                try:
+                    dbx.files_move_v2(pdf_info['path'], new_path, autorename=True)
+                    print(f"✅ SUCCESS → {full_folder_path}")
+
+                    # Update stats
+                    if full_folder_path in folder_mgr.folders:
+                        folder_mgr.folders[full_folder_path]['file_count'] = \
+                            folder_mgr.folders[full_folder_path].get('file_count', 0) + 1
+                        folder_mgr.save_cache()
+
+                    # Add to history
+                    add_to_history(ORGANIZED_HISTORY, pdf_info['path'])
+
+                except dropbox.exceptions.ApiError as e:
+                    print(f"❌ Move error: {e}")
+                    continue
+
+                # Rate limiting between documents
+                if i < len(batch):
+                    print(f"\n⏳ Waiting 5s before next document...")
+                    time.sleep(5)
+
+            except Exception as e:
+                print(f"❌ Processing error: {e}")
+                continue
+
+        return len(batch)
+
+    except Exception as e:
+        print(f"❌ Batch organize error: {e}")
+        return 0
+
+
+# ============================================================================
+# PHASE 2: RENTAL CONTRACT DETECTION
+# ============================================================================
+
+def find_rental_contract_folders(dbx):
+    """Find folders likely containing rental contracts"""
+
+    rental_folders = []
+
+    try:
+        # Check if organized folder exists
+        try:
+            dbx.files_get_metadata(ORGANIZED_FOLDER_PREFIX)
+        except dropbox.exceptions.ApiError:
+            print("⚠️  Organized folder niet gevonden")
+            return []
+
+        # Scan recursively
+        result = dbx.files_list_folder(ORGANIZED_FOLDER_PREFIX, recursive=True)
+
+        while True:
+            for entry in result.entries:
+                if isinstance(entry, dropbox.files.FolderMetadata):
+                    path = entry.path_display
+                    path_lower = path.lower()
+
+                    # Check if folder name contains rental keywords
+                    if any(keyword in path_lower for keyword in RENTAL_KEYWORDS):
+                        rental_folders.append(path)
+                        print(f"   ✓ Huurcontract folder gevonden: {path}")
+
+            if not result.has_more:
+                break
+            result = dbx.files_list_folder_continue(result.cursor)
+
+    except Exception as e:
+        print(f"⚠️  Rental folder scan error: {e}")
+
+    return rental_folders
+
+
+def find_pdfs_in_folders(dbx, folders):
+    """Find all PDFs in specified folders"""
+
+    pdfs = []
+
+    for folder in folders:
+        try:
+            result = dbx.files_list_folder(folder, recursive=False)
+
+            while True:
+                for entry in result.entries:
+                    if isinstance(entry, dropbox.files.FileMetadata):
+                        if entry.name.lower().endswith('.pdf'):
+                            pdfs.append({
+                                'path': entry.path_display,
+                                'name': entry.name,
+                                'folder': folder,
+                                'size': entry.size
+                            })
+
+                if not result.has_more:
+                    break
+                result = dbx.files_list_folder_continue(result.cursor)
+
+        except Exception as e:
+            print(f"⚠️  Error scanning {folder}: {e}")
+            continue
+
+    return pdfs
+
+
+# ============================================================================
+# PHASE 2: CONTRACT DATA EXTRACTION
+# ============================================================================
+
+def extract_contract_data(full_text, gemini_client, model):
+    """
+    Super accurate multi-stage huurcontract extractor.
+    Haalt ALLE data eruit die in het contract staat.
+    """
+
+    # Split text in chunks voor betere extractie
+    text_chunk_1 = full_text[:20000]
+    text_chunk_2 = full_text[15000:35000] if len(full_text) > 15000 else ""
+
+    print("   🎯 Starting DEEP extraction (multi-stage)...")
+
+    extracted_sections = {}
+
+    # ========================================================================
+    # STAGE 1: PARTIJEN (Verhuurder + Huurder)
+    # ========================================================================
+
+    partijen_prompt = f"""Je bent een expert in Belgische huurcontracten. 
+
+TAAK: Extraheer ALLE informatie over verhuurder(s) en huurder(s).
+
+ZOEK SPECIFIEK NAAR:
+- Volledige namen (voor + achternaam, of bedrijfsnaam)
+- Adressen (straat + nummer + bus + postcode + stad)
+- Telefoonnummers (vast + GSM)
+- Email adressen
+- BTW nummers (voor bedrijven)
+- Rijksregisternummers
+
+BELANGRIJK:
+- Als er MEERDERE huurders zijn → combineer namen met " & "
+- Als adres NIET vermeld → gebruik "ONTBREKEND"
+- Als telefoon NIET vermeld → gebruik "ONTBREKEND"
+- Kopieer exacte spelling uit contract
+
+CONTRACT TEKST:
+{text_chunk_1}
+
+VOORBEELD OUTPUT (volg deze structuur EXACT):
+{{
+  "verhuurder": {{
+    "naam": "Vastgoed Beheer NV",
+    "adres": "Industrielaan 5, 9000 Gent",
+    "telefoon": "+32 9 123 45 67",
+    "email": "info@vastgoedbeheer.be"
+  }},
+  "huurder": {{
+    "naam": "Marie Dupont & Peter Vermeulen",
+    "adres": "Voorlopig adres: Kerkstraat 5, 1000 Brussel",
+    "telefoon": "+32 2 987 65 43",
+    "email": "marie.dupont@email.be"
+  }}
+}}
+
+ALLEEN JSON (geen tekst ervoor/erna):"""
+
+    # ========================================================================
+    # STAGE 2: PAND (Adres + Kenmerken + EPC + Kadaster)
+    # ========================================================================
+
+    pand_prompt = f"""Je bent een expert in Belgische huurcontracten.
+
+TAAK: Extraheer ALLE informatie over het gehuurde pand.
+
+ZOEK SPECIFIEK NAAR:
+- Volledig adres (straat + nummer + bus + postcode + stad)
+- Type woning (appartement/huis/studio/etc)
+- Oppervlakte in m² (bewoonbare oppervlakte)
+- Aantal kamers / slaapkamers
+- Verdieping
+- EPC energielabel (A+, A, B, C, D, E, F)
+- EPC certificaatnummer (lang nummer zoals 20231205-0001234-00000001)
+- Kadastrale gegevens (afdeling, sectie, nummer, kadastraal inkomen)
+
+BELANGRIJK:
+- Oppervlakte = alleen het getal (geen "m²")
+- Kadastraal inkomen = bedrag in euro (getal)
+- Als NIET vermeld → gebruik "ONTBREKEND"
+- Kopieer exacte adressen zoals in contract
+
+CONTRACT TEKST:
+{text_chunk_1}
+
+VOORBEELD OUTPUT:
+{{
+  "adres": "Kerkstraat 10 bus 3, 1000 Brussel",
+  "type": "appartement",
+  "oppervlakte": 85.5,
+  "aantal_kamers": 3,
+  "verdieping": 2,
+  "epc": {{
+    "energielabel": "B",
+    "certificaatnummer": "20231205-0001234-00000001"
+  }},
+  "kadaster": {{
+    "afdeling": "Brussel 1e afdeling",
+    "sectie": "A",
+    "nummer": "123/4B",
+    "kadastraal_inkomen": 1234.56
+  }}
+}}
+
+ALLEEN JSON:"""
+
+    # ========================================================================
+    # STAGE 3: FINANCIEEL (Huur + Waarborg + Kosten + Indexatie)
+    # ========================================================================
+
+    financieel_prompt = f"""Je bent een expert in Belgische huurcontracten.
+
+TAAK: Extraheer ALLE financiële informatie.
+
+ZOEK SPECIFIEK NAAR:
+- Maandelijkse huurprijs (bedrag in euro)
+- Waarborg/huurwaarborg bedrag
+- Bank waar waarborg gedeponeerd is (naam + IBAN rekening)
+- Gemeenschappelijke kosten (wat is inbegrepen)
+- Privélasten (energie, water, gas, internet)
+- Indexatie (ja/nee)
+
+BELANGRIJK:
+- Huurprijs = alleen het getal (geen € teken)
+- Waarborg bedrag = alleen het getal
+- waar_gedeponeerd = "Banknaam (rekening BE12 3456 7890 1234)"
+- kosten = beschrijving in tekst (wat inbegrepen, wat apart)
+- indexatie = true/false
+
+CONTRACT TEKST:
+{text_chunk_1}
+
+Extra context:
+{text_chunk_2[:5000] if text_chunk_2 else ""}
+
+VOORBEELD OUTPUT:
+{{
+  "huurprijs": 1150.0,
+  "waarborg": {{
+    "bedrag": 3450.0,
+    "waar_gedeponeerd": "Belfius Bank (rekening BE71 0961 2345 6769)"
+  }},
+  "kosten": "Gemeenschappelijke kosten (verwarming, water, lift) zijn inbegrepen in de huurprijs. Privélasten (elektriciteit, gas, internet) zijn voor rekening van huurder.",
+  "indexatie": true,
+  "gemeenschappelijke_kosten": {{
+    "inbegrepen": [
+      {{"post": "Verwarming"}},
+      {{"post": "Water"}},
+      {{"post": "Lift"}},
+      {{"post": "Gemeenschappelijke delen"}}
+    ]
+  }}
+}}
+
+ALLEEN JSON:"""
+
+    # ========================================================================
+    # STAGE 4: PERIODES (Data + Duur + Opzegtermijnen)
+    # ========================================================================
+
+    periodes_prompt = f"""Je bent een expert in Belgische huurcontracten.
+
+TAAK: Extraheer ALLE informatie over periodes en termijnen.
+
+ZOEK SPECIFIEK NAAR:
+- Ingangsdatum / aanvangsdatum (datum wanneer huur start)
+- Einddatum (als contract bepaalde duur heeft)
+- Duur van het contract (bijv. "9 jaar", "3 jaar", "onbepaalde duur")
+- Opzegtermijn voor huurder (hoeveel maanden)
+- Opzegtermijn voor verhuurder (hoeveel maanden)
+- Eventuele verlengingsvoorwaarden
+
+BELANGRIJK:
+- Datums in formaat YYYY-MM-DD (bijv. "2025-05-01")
+- Als geen einddatum → "ONTBREKEND"
+- Opzegtermijnen apart voor huurder en verhuurder
+- Duur = letterlijk zoals in contract staat
+
+CONTRACT TEKST:
+{text_chunk_1}
+
+Extra context:
+{text_chunk_2[:5000] if text_chunk_2 else ""}
+
+VOORBEELD OUTPUT:
+{{
+  "ingangsdatum": "2025-05-01",
+  "einddatum": "ONTBREKEND",
+  "duur": "9 jaar",
+  "opzegtermijn_huurder": "3 maanden",
+  "opzegtermijn_verhuurder": "6 maanden"
+}}
+
+ALLEEN JSON:"""
+
+    # ========================================================================
+    # STAGE 5: VOORWAARDEN (Huisdieren + Onderverhuur + Werken)
+    # ========================================================================
+
+    voorwaarden_prompt = f"""Je bent een expert in Belgische huurcontracten.
+
+TAAK: Extraheer ALLE bijzondere voorwaarden en bepalingen.
+
+ZOEK SPECIFIEK NAAR:
+- Huisdieren toegestaan? (ja/nee/met toestemming)
+- Onderverhuur toegestaan? (ja/nee)
+- Werken/verbouwingen (wat mag/niet mag)
+- Andere bijzondere bepalingen
+
+BELANGRIJK:
+- huisdieren = true/false/"ONTBREKEND"
+- onderverhuur = true/false
+- werken = beschrijving in tekst
+
+CONTRACT TEKST:
+{text_chunk_1}
+
+Extra context:
+{text_chunk_2[:5000] if text_chunk_2 else ""}
+
+VOORBEELD OUTPUT:
+{{
+  "huisdieren": true,
+  "onderverhuur": false,
+  "werken": "Kleine herstellingswerken toegestaan. Grotere verbouwingen enkel met schriftelijke toestemming van verhuurder."
+}}
+
+ALLEEN JSON:"""
+
+    # ========================================================================
+    # STAGE 6: JURIDISCH (Recht + Rechtbank)
+    # ========================================================================
+
+    juridisch_prompt = f"""Je bent een expert in Belgische huurcontracten.
+
+TAAK: Extraheer juridische bepalingen.
+
+ZOEK SPECIFIEK NAAR:
+- Toepasselijk recht (bijv. "Vlaams Woninghuurdecreet")
+- Bevoegde rechtbank / vrederechter (bijv. "Vrederechter van het kanton Gent")
+
+CONTRACT TEKST:
+{text_chunk_1}
+
+Extra context:
+{text_chunk_2[:5000] if text_chunk_2 else ""}
+
+VOORBEELD OUTPUT:
+{{
+  "toepasselijk_recht": "Vlaams Woninghuurdecreet van 9 november 2018",
+  "bevoegde_rechtbank": "Vrederechter van het kanton Brussel"
+}}
+
+ALLEEN JSON:"""
+
+    # ========================================================================
+    # STAGE 7: CONTRACT METADATA (Type + Datum)
+    # ========================================================================
+
+    metadata_prompt = f"""Je bent een expert in Belgische huurcontracten.
+
+TAAK: Extraheer algemene contract informatie.
+
+ZOEK SPECIFIEK NAAR:
+- Type contract (huurovereenkomst/huurcontract)
+- Datum van ondertekening contract
+
+CONTRACT TEKST:
+{text_chunk_1[:5000]}
+
+VOORBEELD OUTPUT:
+{{
+  "contract_type": "huurovereenkomst",
+  "datum_contract": "2025-03-18"
+}}
+
+ALLEEN JSON:"""
+
+    # ========================================================================
+    # EXECUTE ALL STAGES
+    # ========================================================================
+
+    stages = {
+        "metadata": metadata_prompt,
+        "partijen": partijen_prompt,
+        "pand": pand_prompt,
+        "financieel": financieel_prompt,
+        "periodes": periodes_prompt,
+        "voorwaarden": voorwaarden_prompt,
+        "juridisch": juridisch_prompt
+    }
+
+    for stage_name, prompt in stages.items():
+        print(f"      📊 Extracting {stage_name}...")
+
+        for attempt in range(3):
+            try:
+                response = gemini_client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json"
+                    )
+                )
+
+                # Parse JSON
+                raw = response.text.strip()
+
+                # Clean up mogelijk markdown
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                    raw = raw.strip()
+
+                stage_data = json.loads(raw)
+                extracted_sections[stage_name] = stage_data
+
+                # Count extracted fields
+                non_null_count = sum(1 for v in json.dumps(stage_data).split()
+                                     if v not in ['null', 'None', '""', '{}', '[]',"ONTBREKEND"])
+                print(f"         ✓ {non_null_count} data points extracted")
+                break
+
+            except json.JSONDecodeError as e:
+                print(f"         ⚠️  JSON parse error (attempt {attempt + 1}/3)")
+                if attempt < 2:
+                    time.sleep(3)
+                else:
+                    print(f"         ❌ Failed to extract {stage_name}")
+                    extracted_sections[stage_name] = {}
+
+            except Exception as e:
+                error_msg = str(e)
+                if is_quota_error(error_msg):
+                    return {"error": "QUOTA_EXCEEDED", "details": error_msg}
+
+                if "429" in error_msg and attempt < 2:
+                    print(f"         ⚠️  Rate limit - waiting...")
+                    time.sleep(RETRY_WAIT)
+                else:
+                    print(f"         ❌ Error: {str(e)[:100]}")
+                    extracted_sections[stage_name] = {}
+                    break
+
+        # Small delay tussen stages (rate limiting)
+        # 1. Verhoog base delay
+        time.sleep(5)  # Na elke stage
+
+
+    # 3. Verlaag batch size
+    BATCH_SIZE = 3  # Was 5, nu 3 per cycle
+
+    # ========================================================================
+    # MERGE ALL STAGES
+    # ========================================================================
+
+    metadata = extracted_sections.get("metadata", {})
+
+    final_data = {
+        "contract_type": metadata.get("contract_type", "huurovereenkomst"),
+        "datum_contract": metadata.get("datum_contract"),
+        "partijen": extracted_sections.get("partijen", {}),
+        "pand": extracted_sections.get("pand", {}),
+        "financieel": extracted_sections.get("financieel", {}),
+        "periodes": extracted_sections.get("periodes", {}),
+        "voorwaarden": extracted_sections.get("voorwaarden", {}),
+        "juridisch": extracted_sections.get("juridisch", {})
+    }
+
+    # ========================================================================
+    # VALIDATION & REPORTING
+    # ========================================================================
+
+    print("\n      📋 EXTRACTION SUMMARY:")
+
+    critical_fields = {
+        "Huurprijs": final_data.get("financieel", {}).get("huurprijs"),
+        "Ingangsdatum": final_data.get("periodes", {}).get("ingangsdatum"),
+        "Verhuurder naam": final_data.get("partijen", {}).get("verhuurder", {}).get("naam"),
+        "Huurder naam": final_data.get("partijen", {}).get("huurder", {}).get("naam"),
+        "Pand adres": final_data.get("pand", {}).get("adres")
+    }
+
+    found_critical = sum(1 for v in critical_fields.values() if v)
+    print(f"         Critical fields: {found_critical}/5")
+
+    for field, value in critical_fields.items():
+        status = "✓" if value else "✗"
+        print(f"         {status} {field}: {value or 'MISSING'}")
+
+    # Count all non-null fields
+    total_fields = 0
+    filled_fields = 0
+
+    def count_fields(obj):
+        nonlocal total_fields, filled_fields
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, (dict, list)):
+                    count_fields(v)
+                else:
+                    total_fields += 1
+                    if v is not None and v != "" and v != []:
+                        filled_fields += 1
+        elif isinstance(obj, list):
+            for item in obj:
+                count_fields(item)
+
+    count_fields(final_data)
+
+    completeness = (filled_fields / total_fields * 100) if total_fields > 0 else 0
+    print(f"         Overall completeness: {completeness:.0f}% ({filled_fields}/{total_fields} fields)")
+
+    return final_data
+
+
+# ============================================================================
+# CONFIDENCE & SUMMARY GENERATION
+# ============================================================================
+
+def calculate_confidence_normalized(normalized_data: dict, full_text: str,
+                                   doc_type: str, type_verified: bool) -> dict:
+    """Calculate confidence score based on normalized data completeness"""
+
+    score = 0
+    issues = []
+    warnings = []
+
+    # Base score for verified document type
+    if type_verified:
+        score += 20
+
+    # Critical fields check (40 points max)
+    critical_fields = {
+        'huurprijs': normalized_data.get('financieel', {}).get('huurprijs'),
+        'ingangsdatum': normalized_data.get('periodes', {}).get('ingangsdatum'),
+        'verhuurder_naam': normalized_data.get('partijen', {}).get('verhuurder', {}).get('naam'),
+        'huurder_naam': normalized_data.get('partijen', {}).get('huurder', {}).get('naam'),
+        'pand_adres': normalized_data.get('pand', {}).get('adres')
+    }
+
+    found_critical = sum(1 for v in critical_fields.values() if v and v != "")
+    critical_score = (found_critical / len(critical_fields)) * 40
+    score += critical_score
+
+    if found_critical < len(critical_fields):
+        missing = [k for k, v in critical_fields.items() if not v or v == ""]
+        issues.append(f"Missing critical: {', '.join(missing)}")
+
+    # Overall completeness (30 points max)
+    def count_filled_fields(obj):
+        total = 0
+        filled = 0
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, (dict, list)):
+                    t, f = count_filled_fields(v)
+                    total += t
+                    filled += f
+                else:
+                    total += 1
+                    if v is not None and v != "" and v != [] and v != {}:
+                        filled += 1
+        elif isinstance(obj, list):
+            for item in obj:
+                t, f = count_filled_fields(item)
+                total += t
+                filled += f
+        return total, filled
+
+    total_fields, filled_fields = count_filled_fields(normalized_data)
+    completeness = (filled_fields / total_fields) if total_fields > 0 else 0
+    score += completeness * 30
+
+    # Text quality (10 points max)
+    text_length = len(full_text.strip())
+    if text_length < 500:
+        warnings.append(f"Short document: {text_length} characters")
+        score -= 5
+    elif text_length > 2000:
+        score += 10
+    else:
+        score += 5
+
+    # Normalize score
+    score = max(0, min(100, round(score, 1)))
+
+    # Determine if review needed
+    needs_review = score < TARGET_CONFIDENCE or len(issues) > 0
+
+    # Build details string
+    details_parts = []
+    if issues:
+        details_parts.append("ISSUES:\n- " + "\n- ".join(issues))
+    if warnings:
+        details_parts.append("WARNINGS:\n- " + "\n- ".join(warnings))
+
+    if not details_parts:
+        details_parts.append("All critical fields present")
+        details_parts.append(f"Data completeness: {completeness:.0%}")
+
+    return {
+        'score': score,
+        'needs_review': needs_review,
+        'issues': issues,
+        'warnings': warnings,
+        'details': "\n\n".join(details_parts),
+        'metrics': {
+            'text_length': text_length,
+            'completeness': completeness,
+            'critical_fields_found': found_critical,
+            'critical_fields_total': len(critical_fields)
+        }
+    }
+
+
+def generate_summary(full_text: str, doc_type: str, gemini_client, model) -> str:
+    """Generate natural language summary using Gemini"""
+
+    # Use first 3000 chars for summary
+    text_sample = full_text[:3000] if len(full_text) > 3000 else full_text
+
+    prompt = f"""Maak een bondige samenvatting van dit {doc_type} in maximaal 3 korte alinea's.
+
+Focus op:
+- Partijen (verhuurder en huurder)
+- Pand (adres en kenmerken)
+- Financiële voorwaarden (huur, waarborg)
+- Belangrijkste termijnen en voorwaarden
+
+CONTRACT TEKST:
+{text_sample}
+
+Geef ALLEEN de samenvatting (geen introductie):"""
+
+    try:
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = gemini_client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        max_output_tokens=3000
+                    )
+                )
+
+                summary = response.text.strip()
+                return summary
+
+            except Exception as e:
+                error_str = str(e)
+
+                # Check for quota errors
+                if is_quota_error(error_str):
+                    return "QUOTA_EXCEEDED"
+
+                # Rate limiting
+                if "429" in error_str and attempt < MAX_RETRIES - 1:
+                    print(f"      Rate limit - waiting {RATE_LIMIT_WAIT}s...")
+                    time.sleep(RATE_LIMIT_WAIT)
+                    continue
+
+                # Other errors
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_WAIT)
+                    continue
+                else:
+                    raise
+
+        return "Summary generation failed after multiple attempts"
+
+    except Exception as e:
+        return f"Error generating summary: {str(e)[:200]}"
+
+
+# ============================================================================
+# PHASE 2: PROCESS RENTAL CONTRACT
+# ============================================================================
+
+def process_rental_contract(clients, pdf_info):
+    """Process and analyze a rental contract"""
+
+    dbx_analyze = clients['dbx_analyze']
+    dbx_target = clients['dbx_target']
+    gemini = clients['gemini_analyze']
+    model = clients['model_analyze']
+
+    try:
+        print(f"\n{'='*70}")
+        print(f"📄 {pdf_info['name']}")
+        print(f"📂 Location: {pdf_info['folder']}")
+        print(f"{'='*70}")
+
+        start_time = time.time()
+
+        # Download and extract text WITH OCR fallback
+        print(f"⬇️  Downloading...")
+        _, response = dbx_analyze.files_download(pdf_info['path'])
+
+        print(f"📖 Extracting text...")
+        full_text, pdf_metadata = extract_text_with_ocr(response.content, gemini, model)
+        print(f"✓ Text: {len(full_text)} chars")
+
+        if len(full_text.strip()) < 50:
+            print(f"⚠️  Too little text - skipping")
+            return None
+
+        # Extract raw data
+        print("🤖 Gemini analyzing contract...")
+        contract_data = extract_contract_data(full_text, gemini, model)
+
+        if contract_data.get('error') == 'QUOTA_EXCEEDED':
+            print(f"❌ QUOTA EXCEEDED - stopping analysis phase")
+            return {'quota_error': True}
+
+        # Normalize data
+        normalized_data = normalizer.normalize(contract_data)
+
+        # Calculate confidence
+        confidence = calculate_confidence_normalized(normalized_data, full_text,
+                                                     "huurovereenkomst", True)
+
+        # Generate summary
+        summary = generate_summary(full_text, "huurovereenkomst", gemini, model)
+
+        if "QUOTA_EXCEEDED" in summary:
+            print(f"❌ QUOTA EXCEEDED - stopping analysis phase")
+            return {'quota_error': True}
+
+        processing_time = time.time() - start_time
+
+        print(f"✓ Processed in {processing_time:.1f}s - Score: {confidence['score']}%")
+
+        result = {
+            "success": True,
+            "filename": pdf_info['name'],
+            "title": "Huurovereenkomst",
+            "type_verified": True,
+            "full_text": full_text,
+            "raw_data": contract_data,
+            "normalized_data": normalized_data,
+            "summary": summary,
+            "confidence": confidence,
+            "processing_time": processing_time
+        }
+
+        # Save JSON to TARGET
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        base = pdf_info['name'].replace('.pdf', '')
+
+        json_data = {
+            "filename": result['filename'],
+            "document_type": result['title'],
+            "type_verified": result['type_verified'],
+            "processed": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "confidence": result['confidence'],
+            "contract_data": normalized_data,
+            "summary": result['summary']
+        }
+
+        if "raw_data" in result and "error" not in result['raw_data']:
+            json_data["raw_data"] = result['raw_data']
+
+        json_file = f"/data_{base}_{ts}.json"
+
+        print(f"💾 Saving JSON to TARGET...")
+        dbx_target.files_upload(
+            json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
+            json_file,
+            mode=dropbox.files.WriteMode.overwrite
+        )
+
+        print(f"✅ JSON saved: {json_file}")
+
+        # Log to CSV
+        log_to_csv(dbx_target, pdf_info['name'], result, json_file, "success")
+
+        # Send email
+        conf = result['confidence']
+
+        if conf['score'] >= TARGET_CONFIDENCE and not conf['needs_review']:
+            status_section = f"""STATUS
+Confidence Score: {conf['score']}%
+Assessment: ✅ Approved
+Data Completeness: {conf['metrics'].get('completeness', 0):.0%}
+"""
+        else:
+            status_section = f"""STATUS
+Confidence Score: {conf['score']}%
+Assessment: ⚠️ Review Required
+Data Completeness: {conf['metrics'].get('completeness', 0):.0%}
+
+ATTENTION POINTS
+{conf['details']}
+"""
+
+        # Add key contract details
+        normalized = result['normalized_data']
+        details_section = ""
+
+        if normalized.get('partijen'):
+            verhuurder = normalized['partijen'].get('verhuurder', {}).get('naam', 'N/A')
+            huurder = normalized['partijen'].get('huurder', {}).get('naam', 'N/A')
+            details_section += f"""
+PARTIES
+Landlord: {verhuurder}
+Tenant: {huurder}
+"""
+
+        if normalized.get('pand'):
+            adres = normalized['pand'].get('adres', 'N/A')
+            details_section += f"""
+PROPERTY
+Address: {adres}
+"""
+
+        if normalized.get('financieel'):
+            huurprijs = normalized['financieel'].get('huurprijs')
+            waarborg = normalized['financieel'].get('waarborg', {}).get('bedrag')
+            if huurprijs or waarborg:
+                details_section += f"""
+FINANCIAL"""
+                if huurprijs:
+                    details_section += f"\nRent: €{huurprijs:.2f}/month"
+                if waarborg:
+                    details_section += f"\nDeposit: €{waarborg:.2f}"
+                details_section += "\n"
+
+        if normalized.get('periodes'):
+            start = normalized['periodes'].get('ingangsdatum', 'N/A')
+            duur = normalized['periodes'].get('duur', 'N/A')
+            details_section += f"""
+PERIOD
+Start Date: {start}
+Duration: {duur}
+"""
+
+        email_body = f"""Dear,
+
+Please find attached the automated analysis of the following document:
+
+DOCUMENT INFORMATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Filename: {pdf_info['name']}
+Type: {result['title']}
+Size: {format_file_size(len(response.content))}
+Processing Date: {datetime.now().strftime('%d-%m-%Y %H:%M')}
+
+{status_section}
+KEY DATA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{details_section}
+SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{result['summary']}
+
+STRUCTURED DATA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Full JSON available in Dropbox:
+{json_file}
+
+✅ JSON ready for import into your v0 website
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This analysis was automatically generated.
+Please review the data for documents requiring review.
+
+Best regards,
+Automated Document Processing System
+"""
+
+        subject = f"Contract Processed: {result['title']} - {pdf_info['name']}"
+        send_email(subject, email_body)
+
+        if result['confidence']['needs_review']:
+            print("⚠️  Review required")
+        else:
+            print("✅ Approved")
+
+        return result
+
+    except Exception as e:
+        print(f"❌ Processing error: {e}")
+        return None
+
+
+# ============================================================================
+# PHASE 2: ANALYZE RENTAL CONTRACTS
+# ============================================================================
+
+def analyze_rental_contracts(clients, analyzed_history):
+    """Find and analyze all rental contracts"""
+
+    dbx_analyze = clients['dbx_analyze']
+
+    print(f"\n{'='*70}")
+    print(f"🔍 PHASE 2: ANALYZING RENTAL CONTRACTS")
+    print(f"{'='*70}")
+
+    # DEBUG: Show what's in history
+    print(f"📋 Analyzed history contains {len(analyzed_history)} entries")
+    if analyzed_history:
+        print(f"   Sample entries:")
+        for path in list(analyzed_history)[:3]:
+            print(f"   - {path}")
+
+    # Find rental contract folders
+    print("📁 Scanning for rental contract folders...")
+    rental_folders = find_rental_contract_folders(dbx_analyze)
+
+    if not rental_folders:
+        print("ℹ️  No rental contract folders found")
+        print(f"   Tip: Folders moeten keywords bevatten: {', '.join(RENTAL_KEYWORDS)}")
+        return 0
+
+    print(f"✓ Found {len(rental_folders)} rental folder(s):")
+    for folder in rental_folders:
+        print(f"   - {folder}")
+
+    # Find PDFs in these folders
+    print("\n📄 Finding PDFs in rental folders...")
+    all_pdfs = find_pdfs_in_folders(dbx_analyze, rental_folders)
+
+    if not all_pdfs:
+        print("ℹ️  No PDFs found in rental folders")
+        return 0
+
+    print(f"✓ Found {len(all_pdfs)} PDF(s) in rental folders")
+
+    # DEBUG: Show all PDF paths
+    print(f"\n📝 All PDF paths found:")
+    for pdf in all_pdfs[:5]:
+        in_history = "✓ IN HISTORY" if pdf['path'] in analyzed_history else "✗ NEW"
+        print(f"   {in_history}: {pdf['path']}")
+    if len(all_pdfs) > 5:
+        print(f"   ... and {len(all_pdfs) - 5} more")
+
+    # Filter out already analyzed
+    new_pdfs = [pdf for pdf in all_pdfs if pdf['path'] not in analyzed_history]
+
+    if not new_pdfs:
+        print("✅ All rental contracts already analyzed")
+        print(f"   Total analyzed: {len(all_pdfs)}")
+        return 0
+
+    print(f"\n✓ Found {len(new_pdfs)} new contract(s) to analyze")
+    print(f"   Already analyzed: {len(all_pdfs) - len(new_pdfs)}")
+
+    # Process each contract
+    analyzed_count = 0
+    quota_hit = False
+
+    for i, pdf_info in enumerate(new_pdfs, 1):
+        print(f"\n📋 Contract {i}/{len(new_pdfs)}")
+        print(f"   Path: {pdf_info['path']}")
+
+        result = process_rental_contract(clients, pdf_info)
+
+        if result and result.get('quota_error'):
+            quota_hit = True
+            print(f"\n{'='*70}")
+            print(f"⚠️  GEMINI API QUOTA REACHED")
+            print(f"{'='*70}")
+            print(f"Daily limit reached during analysis phase.")
+            print(f"Analyzed {analyzed_count} contract(s) before quota limit.")
+            print(f"Remaining contracts will be processed in next cycle.")
+            print(f"{'='*70}")
+            break
+
+        if result and result.get('success'):
+            print(f"   ✓ Adding to history: {pdf_info['path']}")
+            add_to_history(ANALYZED_HISTORY, pdf_info['path'])
+            analyzed_count += 1
+
+        # Rate limiting
+        if i < len(new_pdfs) and not quota_hit:
+            print(f"\n⏳ Waiting 10s before next contract...")
+            time.sleep(10)
+
+    if analyzed_count > 0:
+        print(f"\n✅ Successfully analyzed {analyzed_count} contract(s)")
+
+    return analyzed_count
+
+
+# ============================================================================
+# MAIN LOOP
+# ============================================================================
+
+def main():
+    """Main monitoring loop"""
+
+    print(f"""
+╔══════════════════════════════════════════════════════════════════════╗
+║           SMART CONTRACT SYSTEM - ORGANIZE + ANALYZE                 ║
+║                                                                      ║
+║  PHASE 1: Auto-organize PDFs with OCR support                       ║
+║  PHASE 2: Analyze rental contracts → JSON                           ║
+║                                                                      ║
+║  ✓ 3 Dropbox clients (organize/analyze/target)                      ║
+║  ✓ 2 Gemini clients (organize/analyze)                              ║
+║  ✓ Batch processing (max {BATCH_SIZE} per cycle)                         ║
+║  ✓ Robust error handling                                            ║
+╚══════════════════════════════════════════════════════════════════════╝
+    """)
+
+    # Initialize
+    clients = init_clients()
+
+    if not clients:
+        print("❌ Cannot start - check credentials!")
+        return
+
+    folder_mgr = FolderManager(clients['dbx_organize'])
+
+    # Load history
+    organized_history = load_history(ORGANIZED_HISTORY)
+    analyzed_history = load_history(ANALYZED_HISTORY)
+
+    print(f"\n✓ Organized history: {len(organized_history)} file(s)")
+    print(f"✓ Analyzed history: {len(analyzed_history)} contract(s)")
+    print(f"\n{'='*70}")
+    print(f"🚀 SYSTEM STARTED")
+    print(f"{'='*70}\n")
+
+    while True:
+        try:
+            # PHASE 1: Organize batch
+            organized_count = organize_batch(clients, folder_mgr, organized_history, BATCH_SIZE)
+
+            if organized_count > 0:
+                print(f"\n✅ Organized {organized_count} document(s)")
+
+                # Reload history
+                organized_history = load_history(ORGANIZED_HISTORY)
+
+            else:
+                # PHASE 2: Analyze rental contracts (only if nothing to organize)
+                analyzed_count = analyze_rental_contracts(clients, analyzed_history)
+
+                if analyzed_count > 0:
+                    print(f"\n✅ Analyzed {analyzed_count} rental contract(s)")
+
+                    # Reload history
+                    analyzed_history = load_history(ANALYZED_HISTORY)
+
+                else:
+                    ts = datetime.now().strftime('%H:%M:%S')
+                    print(f"\n[{ts}] ✅ All organized & analyzed - waiting for new documents...",
+                          end='\r', flush=True)
+
+            # Wait before next cycle
+            time.sleep(CHECK_INTERVAL)
+
+        except KeyboardInterrupt:
+            print("\n\n⏹️  Stopped by user")
+            break
+
+        except Exception as e:
+            print(f"\n❌ Unexpected error: {e}")
+            print(f"⏳ Retrying in 60s...")
+            time.sleep(60)
+
+
+if __name__ == "__main__":
+    main()
