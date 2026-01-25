@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 
-export type DocumentStatus = "parsed" | "needs_review" | "pushed" | "error" | "pending"
+export type DocumentStatus = "parsed" | "needs_review" | "pushed" | "error" | "pending" | "manually_edited"
 
 const statusConfig: Record<DocumentStatus, { label: string; className: string }> = {
   parsed: {
@@ -23,6 +23,10 @@ const statusConfig: Record<DocumentStatus, { label: string; className: string }>
   pending: {
     label: "Pending",
     className: "bg-status-pending/20 text-status-pending border-status-pending/30",
+  },
+  manually_edited: {
+    label: "Manueel Aangepast",
+    className: "bg-blue-500/20 text-blue-500 border-blue-500/30",
   },
 }
 

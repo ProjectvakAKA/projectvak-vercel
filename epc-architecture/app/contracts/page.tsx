@@ -9,28 +9,28 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge, type DocumentStatus } from '@/components/status-badge'
-import { Search, Eye, RefreshCw, Filter, Building2, FileText, AlertCircle, CheckCircle2, MapPin, User, Euro, Clock } from 'lucide-react'
+import { Search, Eye, RefreshCw, Filter, Building2, FileText, AlertCircle, CheckCircle2, MapPin, User, Euro, Clock, ChevronDown, ChevronUp, X, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-interface ContractFile {
-  name: string
-  path: string
-  size: number
-  modified: string
-  pand_adres?: string | null
-  pand_type?: string | null
-  verhuurder_naam?: string | null
-  huurprijs?: number | null
-  confidence?: number | null
-  processed?: string
-}
+import { ContractFile, ContractsResponse } from '@/lib/types'
+import { logger } from '@/lib/logger'
 
 function getContractStatus(contract: ContractFile): DocumentStatus {
+  // Check if contract was manually edited (highest priority)
+  if ((contract as any).edited?.timestamp || (contract as any).manually_edited) {
+    return 'manually_edited'
+  }
+  
   if (!contract.confidence) return 'pending'
+  
+  // Only "pushed" if confidence >= 95 (fully processed and approved)
   if (contract.confidence >= 95) return 'pushed'
-  if (contract.confidence >= 80) return 'parsed'
+  
+  // Everything below 95% needs review (even if parsed, it needs manual check)
   if (contract.confidence >= 60) return 'needs_review'
-  return 'error'
+  
+  // Below 60% is error or pending
+  if (contract.confidence > 0) return 'error'
+  return 'pending'
 }
 
 export default function ContractsPage() {
@@ -39,6 +39,11 @@ export default function ContractsPage() {
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
+  const [priceMin, setPriceMin] = useState<string>('')
+  const [priceMax, setPriceMax] = useState<string>('')
 
   const fetchContracts = async () => {
     try {
@@ -48,21 +53,13 @@ export default function ContractsPage() {
       if (!response.ok) {
         throw new Error('Failed to fetch contracts')
       }
-      const data = await response.json()
-      const contractsList = data.contracts || []
-      console.log('📥 Fetched contracts:', contractsList.length)
-      console.log('📋 Sample contract data:', contractsList.slice(0, 2).map((c: any) => ({
-        name: c.name,
-        pand_adres: c.pand_adres,
-        pand_type: c.pand_type,
-        verhuurder_naam: c.verhuurder_naam,
-        huurprijs: c.huurprijs,
-        confidence: c.confidence
-      })))
+      const data: ContractsResponse = await response.json()
+      const contractsList: ContractFile[] = data.contracts || []
+      logger.info('Fetched contracts', { count: contractsList.length })
       setContracts(contractsList)
-    } catch (err: any) {
-      console.error('❌ Error fetching contracts:', err)
-      setError(err.message || 'Failed to load contracts')
+    } catch (err: unknown) {
+      logger.error('Error fetching contracts', err)
+      setError(err instanceof Error ? err.message : 'Failed to load contracts')
     } finally {
       setLoading(false)
     }
@@ -72,14 +69,83 @@ export default function ContractsPage() {
     fetchContracts()
   }, [])
 
+  // Auto-refresh every 30 seconds, but pause if user is interacting
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null
+    let timeoutId: NodeJS.Timeout | null = null
+    
+    const setupAutoRefresh = () => {
+      // Clear any existing interval
+      if (intervalId) clearInterval(intervalId)
+      
+      // Only auto-refresh if not loading and no error
+      if (!loading && !error) {
+        intervalId = setInterval(() => {
+          // Don't refresh if user is actively typing in search/filters
+          if (document.activeElement?.tagName === 'INPUT' || 
+              document.activeElement?.tagName === 'TEXTAREA' ||
+              document.activeElement?.tagName === 'SELECT') {
+            // User is typing, skip this refresh
+            return
+          }
+          
+          fetchContracts()
+        }, 30000) // 30 seconds
+      }
+    }
+    
+    // Initial setup
+    setupAutoRefresh()
+    
+    // Reset interval when loading/error state changes
+    const handleStateChange = () => {
+      if (timeoutId) clearTimeout(timeoutId)
+      timeoutId = setTimeout(setupAutoRefresh, 1000)
+    }
+    
+    // Cleanup
+    return () => {
+      if (intervalId) clearInterval(intervalId)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [loading, error])
+
   const filteredContracts = contracts.filter((contract) => {
+    // Basic search
     const matchesSearch =
       contract.pand_adres?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       contract.verhuurder_naam?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       contract.name.toLowerCase().includes(searchQuery.toLowerCase())
+    
+    // Status filter
     const status = getContractStatus(contract)
     const matchesStatus = statusFilter === 'all' || status === statusFilter
-    return matchesSearch && matchesStatus
+    
+    // Date range filter
+    let matchesDate = true
+    if (dateFrom || dateTo) {
+      const contractDate = new Date(contract.modified)
+      if (dateFrom) {
+        const fromDate = new Date(dateFrom)
+        fromDate.setHours(0, 0, 0, 0)
+        if (contractDate < fromDate) matchesDate = false
+      }
+      if (dateTo) {
+        const toDate = new Date(dateTo)
+        toDate.setHours(23, 59, 59, 999)
+        if (contractDate > toDate) matchesDate = false
+      }
+    }
+    
+    // Price range filter
+    let matchesPrice = true
+    if (priceMin || priceMax) {
+      const price = contract.huurprijs || 0
+      if (priceMin && price < parseFloat(priceMin)) matchesPrice = false
+      if (priceMax && price > parseFloat(priceMax)) matchesPrice = false
+    }
+    
+    return matchesSearch && matchesStatus && matchesDate && matchesPrice
   })
 
   // Calculate status counts from contracts using useMemo for performance
@@ -91,6 +157,7 @@ export default function ContractsPage() {
       needs_review: number
       pending: number
       error: number
+      manually_edited: number
     } = {
       total: contracts.length,
       pushed: 0,
@@ -98,11 +165,13 @@ export default function ContractsPage() {
       needs_review: 0,
       pending: 0,
       error: 0,
+      manually_edited: 0,
     }
 
     contracts.forEach((contract) => {
       const status = getContractStatus(contract)
-      if (status === 'pushed') counts.pushed++
+      if (status === 'manually_edited') counts.manually_edited++
+      else if (status === 'pushed') counts.pushed++
       else if (status === 'parsed') counts.parsed++
       else if (status === 'needs_review') counts.needs_review++
       else if (status === 'pending') counts.pending++
@@ -111,8 +180,9 @@ export default function ContractsPage() {
 
     // Debug logging
     if (contracts.length > 0) {
-      console.log('📊 Status breakdown:', {
+      logger.debug('Status breakdown', {
         total: counts.total,
+        manually_edited: counts.manually_edited,
         pushed: counts.pushed,
         parsed: counts.parsed,
         needs_review: counts.needs_review,
@@ -134,9 +204,15 @@ export default function ContractsPage() {
       {/* Header */}
       <div className="border-b border-border bg-card/50 px-6 py-4">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-foreground">Contracts</h1>
-            <p className="text-sm text-muted-foreground">Rental contracts and their extracted data from Dropbox</p>
+          <div className="flex items-center gap-4">
+            {/* Image/Icon */}
+            <div className="h-16 w-16 rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border-2 border-primary/20 flex items-center justify-center shrink-0 shadow-sm">
+              <FileText className="h-8 w-8 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-semibold text-foreground">Huurcontracten</h1>
+              <p className="text-sm text-muted-foreground">Geanalyseerde huurcontracten en hun geëxtraheerde data uit Dropbox</p>
+            </div>
           </div>
           <Button size="sm" variant="outline" className="gap-2 bg-transparent" onClick={fetchContracts} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
@@ -146,11 +222,23 @@ export default function ContractsPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 p-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4 p-6">
         <Card className="bg-card border-border">
           <CardContent className="p-4">
             <div className="text-2xl font-bold text-foreground">{statusCounts.total}</div>
             <div className="text-xs text-muted-foreground">Total</div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border border-blue-500/30 bg-blue-500/5">
+          <CardContent className="p-4">
+            <div className="text-2xl font-bold text-blue-500">{statusCounts.manually_edited}</div>
+            <div className="text-xs text-muted-foreground">Manueel Aangepast</div>
+          </CardContent>
+        </Card>
+        <Card className="bg-card border-border">
+          <CardContent className="p-4">
+            <div className="text-2xl font-bold text-status-warning">{statusCounts.needs_review}</div>
+            <div className="text-xs text-muted-foreground">Needs Review</div>
           </CardContent>
         </Card>
         <Card className="bg-card border-border">
@@ -159,16 +247,10 @@ export default function ContractsPage() {
             <div className="text-xs text-muted-foreground">Complete</div>
           </CardContent>
         </Card>
-        <Card className="bg-card border-border">
+        <Card className="bg-card border-border opacity-50">
           <CardContent className="p-4">
             <div className="text-2xl font-bold text-status-success">{statusCounts.parsed}</div>
-            <div className="text-xs text-muted-foreground">Parsed</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardContent className="p-4">
-            <div className="text-2xl font-bold text-status-warning">{statusCounts.needs_review}</div>
-            <div className="text-xs text-muted-foreground">Needs Review</div>
+            <div className="text-xs text-muted-foreground">Parsed (≥80%)</div>
           </CardContent>
         </Card>
         <Card className="bg-card border-border">
@@ -186,23 +268,25 @@ export default function ContractsPage() {
       </div>
 
       {/* Filters */}
-      <div className="px-6 pb-4 flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search by address or landlord..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 bg-secondary border-border"
-          />
-        </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[180px] bg-secondary border-border">
-            <Filter className="h-4 w-4 mr-2" />
-            <SelectValue placeholder="Filter by status" />
-          </SelectTrigger>
-          <SelectContent>
+      <div className="px-6 pb-4 space-y-3">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search by address or landlord..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 bg-secondary border-border"
+            />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-[180px] bg-secondary border-border">
+              <Filter className="h-4 w-4 mr-2" />
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
+            <SelectContent>
             <SelectItem value="all">All Statuses</SelectItem>
+            <SelectItem value="manually_edited">Manueel Aangepast</SelectItem>
             <SelectItem value="pending">Pending</SelectItem>
             <SelectItem value="parsed">Ready</SelectItem>
             <SelectItem value="needs_review">Needs Review</SelectItem>
@@ -210,7 +294,87 @@ export default function ContractsPage() {
             <SelectItem value="error">Has Errors</SelectItem>
           </SelectContent>
         </Select>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+          className="bg-secondary border-border"
+        >
+          {showAdvancedFilters ? <ChevronUp className="h-4 w-4 mr-2" /> : <ChevronDown className="h-4 w-4 mr-2" />}
+          Advanced Filters
+        </Button>
+        {(dateFrom || dateTo || priceMin || priceMax) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setDateFrom('')
+              setDateTo('')
+              setPriceMin('')
+              setPriceMax('')
+            }}
+            className="text-muted-foreground"
+          >
+            <X className="h-4 w-4 mr-2" />
+            Clear
+          </Button>
+        )}
+        </div>
+        
+        {/* Advanced Filters */}
+        {showAdvancedFilters && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 p-4 bg-muted/50 rounded-lg border border-border">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Date From</label>
+              <Input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="bg-background"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Date To</label>
+              <Input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="bg-background"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Min Price (€)</label>
+              <Input
+                type="number"
+                placeholder="0"
+                value={priceMin}
+                onChange={(e) => setPriceMin(e.target.value)}
+                className="bg-background"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Max Price (€)</label>
+              <Input
+                type="number"
+                placeholder="∞"
+                value={priceMax}
+                onChange={(e) => setPriceMax(e.target.value)}
+                className="bg-background"
+              />
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Results count */}
+      {!loading && (
+        <div className="px-6 pb-2">
+          <p className="text-sm text-muted-foreground">
+            {filteredContracts.length} van {contracts.length} contracten
+            {(dateFrom || dateTo || priceMin || priceMax) && ' (gefilterd)'}
+          </p>
+        </div>
+      )}
 
       {/* Contract Cards */}
       <div className="flex-1 px-6 pb-6 overflow-auto">
@@ -238,7 +402,7 @@ export default function ContractsPage() {
 
               // Debug: log contract data
               if (filteredContracts.indexOf(contract) < 2) {
-                console.log('📄 Rendering contract card:', {
+                logger.debug('Rendering contract card', {
                   name: contract.name,
                   pand_adres: contract.pand_adres,
                   pand_type: contract.pand_type,
@@ -250,9 +414,14 @@ export default function ContractsPage() {
               }
 
               return (
-                <Card key={contract.path} className="bg-card border-border hover:border-primary/50 transition-colors">
-                  <CardContent className="p-5">
-                    <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                <Link 
+                  key={contract.path} 
+                  href={`/contracts/${encodeURIComponent(contract.name)}`}
+                  className="block"
+                >
+                  <Card className="bg-card border-border hover:border-primary/50 hover:shadow-md transition-all cursor-pointer group">
+                    <CardContent className="p-5">
+                      <div className="flex flex-col lg:flex-row lg:items-center gap-4">
                       {/* Contract Info */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start gap-3">
@@ -330,13 +499,12 @@ export default function ContractsPage() {
                           </p>
                         </div>
 
-                        {/* View button */}
-                        <Button variant="outline" size="sm" asChild className="bg-transparent shrink-0">
-                          <Link href={`/contracts/${encodeURIComponent(contract.name)}`}>
-                            <Eye className="h-4 w-4 mr-2" />
-                            View
-                          </Link>
-                        </Button>
+                        {/* View indicator - card is now fully clickable */}
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground group-hover:text-primary transition-colors shrink-0">
+                          <Eye className="h-4 w-4" />
+                          <span>Bekijken</span>
+                          <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
                       </div>
                     </div>
 
@@ -353,6 +521,7 @@ export default function ContractsPage() {
                     </div>
                   </CardContent>
                 </Card>
+                </Link>
               )
             })}
           </div>

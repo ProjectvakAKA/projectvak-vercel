@@ -1,28 +1,11 @@
 import type { Metadata } from 'next'
 import { DashboardLayout } from '@/components/dashboard-layout'
+import { Toaster } from 'sonner'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Real Estate Document Parser',
+  title: 'Document Hub',
   description: 'Automatische analyse en extractie van huurcontracten uit Dropbox',
-  generator: 'v0.app',
-  icons: {
-    icon: [
-      {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
-      },
-      {
-        url: '/icon.svg',
-        type: 'image/svg+xml',
-      },
-    ],
-    apple: '/apple-icon.png',
-  },
 }
 
 export default function RootLayout({
@@ -36,6 +19,13 @@ export default function RootLayout({
         <DashboardLayout>
           {children}
         </DashboardLayout>
+        <Toaster 
+          position="bottom-right" 
+          richColors 
+          toastOptions={{
+            duration: 3000,
+          }}
+        />
       </body>
     </html>
   )
