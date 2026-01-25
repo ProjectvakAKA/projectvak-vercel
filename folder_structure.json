@@ -9,7 +9,7 @@
     "name": "Huurcontracten",
     "created": "2026-01-24T19:35:44.398235",
     "description": "Deze folder is bestemd voor alle huurovereenkomsten, inclusief woonhuur, handelshuur en studentenhuurcontracten, samen met eventuele bijlagen zoals plaatsbeschrijvingen en EPC's.",
-    "file_count": 12
+    "file_count": 13
   },
   "/Georganiseerd/Contracten": {
     "name": "Contracten",
@@ -81,6 +81,12 @@
     "name": "Huurcontract_Sjablonen",
     "created": "2026-01-25T10:37:09.358057",
     "description": "Deze folder is bestemd voor sjablonen en voorbeelden van huurcontracten.",
+    "file_count": 1
+  },
+  "/Georganiseerd/Reizen/Reisroutes_Engels": {
+    "name": "Reisroutes_Engels",
+    "created": "2026-01-25T17:30:16.849666",
+    "description": "Reisroutes en gedetailleerde reisplannen in het Engels.",
     "file_count": 1
   }
 }

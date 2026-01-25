@@ -13,3 +13,5 @@
 /documents17.pdf
 /png2pdf.pdf
 /documents18.pdf
+/iets.pdf
+/Boston.pdf

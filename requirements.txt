@@ -1,7 +1,7 @@
 dropbox
 pdfplumber
 PyMuPDF
-google-generativeai
+google-genai
 pdf2image
 pillow
 python-dotenv

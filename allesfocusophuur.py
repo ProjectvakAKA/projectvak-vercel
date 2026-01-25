@@ -3,11 +3,6 @@ SMART CONTRACT SYSTEM - COMPLETE & FIXED
 Fase 1: Organiseert PDFs automatisch met OCR support
 Fase 2: Analyseert huurcontracten en genereert JSON
 
-Installatievereisten:
-pip install dropbox pdfplumber PyMuPDF google-generativeai pdf2image pillow python-dotenv
-
-Op Mac/Linux: brew install poppler
-Op Windows: Download poppler en zet in PATH
 
 BELANGRIJK: Maak een .env bestand aan met alle credentials (zie .env.example)
 """
@@ -22,18 +17,39 @@ import smtplib
 import json
 import base64
 import re
+import logging
+import functools
 from datetime import datetime, timedelta
 from google import genai
 from google.genai import types
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 from pdf2image import convert_from_bytes
 from PIL import Image
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# ============================================================================
+# LOGGING SETUP
+# ============================================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('contract_system.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# RETRY DECORATOR (will be defined after constants)
+# ============================================================================
+# Note: Retry decorator implementation moved after constants definition
 
 # ============================================================================
 # CONFIGURATIE - CREDENTIALS
@@ -104,6 +120,79 @@ RENTAL_KEYWORDS = [
     'huur', 'verhuur', 'rental', 'lease',
     'huurcontract', 'huurovereenkomst'
 ]
+
+# ============================================================================
+# TEXT EXTRACTION CONSTANTS
+# ============================================================================
+
+TEXT_SAMPLE_SIZE = 3500  # Characters for classification
+TEXT_CHUNK_1_SIZE = 20000  # First chunk for extraction
+TEXT_CHUNK_2_SIZE = 35000  # Second chunk for extraction
+TEXT_CHUNK_OVERLAP = 15000  # Overlap between chunks
+MIN_TEXT_LENGTH = 200  # Minimum text to avoid OCR
+MIN_TEXT_FOR_PROCESSING = 30  # Minimum text to process document
+SUMMARY_TEXT_SIZE = 3000  # Text size for summary generation
+INITIAL_PAGES_TO_SCAN = 5  # Pages to scan initially
+MAX_PAGES_TO_SCAN = 15  # Maximum pages to scan
+OCR_PAGES_LIMIT = 3  # Maximum pages for OCR
+OCR_DPI = 200  # DPI for OCR image conversion
+
+# ============================================================================
+# RETRY DECORATOR
+# ============================================================================
+
+def retry_on_failure(max_retries: int = MAX_RETRIES, wait_time: int = RETRY_WAIT, 
+                     exceptions: tuple = (Exception,)):
+    """Decorator to retry function on failure"""
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}): {e}")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+                        raise
+            return None
+        return wrapper
+    return decorator
+
+# ============================================================================
+# CREDENTIALS VALIDATION
+# ============================================================================
+
+def validate_credentials() -> bool:
+    """Validate that all required credentials are loaded"""
+    required_creds = {
+        'APP_KEY_SOURCE_FULL': APP_KEY_SOURCE_FULL,
+        'APP_SECRET_SOURCE_FULL': APP_SECRET_SOURCE_FULL,
+        'REFRESH_TOKEN_SOURCE_FULL': REFRESH_TOKEN_SOURCE_FULL,
+        'GEMINI_API_KEY_ORGANIZE': GEMINI_API_KEY_ORGANIZE,
+        'APP_KEY_SOURCE_RO': APP_KEY_SOURCE_RO,
+        'APP_SECRET_SOURCE_RO': APP_SECRET_SOURCE_RO,
+        'REFRESH_TOKEN_SOURCE_RO': REFRESH_TOKEN_SOURCE_RO,
+        'GEMINI_API_KEY_ANALYZE': GEMINI_API_KEY_ANALYZE,
+        'APP_KEY_TARGET': APP_KEY_TARGET,
+        'APP_SECRET_TARGET': APP_SECRET_TARGET,
+        'REFRESH_TOKEN_TARGET': REFRESH_TOKEN_TARGET,
+        'SENDER_EMAIL': SENDER_EMAIL,
+        'SENDER_PASSWORD': SENDER_PASSWORD,
+        'RECIPIENT_EMAIL': RECIPIENT_EMAIL[0] if RECIPIENT_EMAIL else None
+    }
+    
+    missing = [key for key, value in required_creds.items() if not value]
+    
+    if missing:
+        logger.error(f"Missing required credentials: {', '.join(missing)}")
+        logger.error("Please check your .env file and ensure all credentials are set.")
+        return False
+    
+    logger.info("✓ All credentials validated successfully")
+    return True
 
 
 # ============================================================================
@@ -709,34 +798,43 @@ def log_to_csv(dbx_target, filename, result, json_path, status="success"):
 
 def init_clients():
     """Initialize all Dropbox and Gemini clients"""
+    # Validate credentials first
+    if not validate_credentials():
+        return None
+    
     try:
-        # Gemini clients first
+        # Gemini clients first - create clients (they'll fail when used if API key is invalid)
+        # This allows code to start and fail gracefully when actually using Gemini
         client_organize = genai.Client(api_key=GEMINI_API_KEY_ORGANIZE)
         client_analyze = genai.Client(api_key=GEMINI_API_KEY_ANALYZE)
 
-        # Dynamically select best available model
-        all_models = client_organize.models.list()
-        generative_models = []
-        for m in all_models:
-            model_name = m.name.replace('models/', '')
-            if 'gemini' in model_name.lower() and 'embedding' not in model_name.lower():
-                generative_models.append(model_name)
-
-        print(f"Beschikbare modellen: {generative_models}")
-
-        # Preferred models (stable, geen experimental!)
-        preferred_models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        # Try to dynamically select best available model, fallback to default if API key invalid
         model_id = None
-        for pref in preferred_models:
-            if pref in generative_models:
-                model_id = pref
-                break
+        try:
+            all_models = client_organize.models.list()
+            generative_models = []
+            for m in all_models:
+                model_name = m.name.replace('models/', '')
+                if 'gemini' in model_name.lower() and 'embedding' not in model_name.lower():
+                    generative_models.append(model_name)
 
-        if not model_id and generative_models:
-            model_id = generative_models[0]
+            logger.info(f"Available models: {generative_models}")
+
+            # Preferred models (stable, geen experimental!)
+            preferred_models = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+            for pref in preferred_models:
+                if pref in generative_models:
+                    model_id = pref
+                    break
+
+            if not model_id and generative_models:
+                model_id = generative_models[0]
+        except Exception as model_error:
+            logger.warning(f"Could not list models (API key may be invalid): {model_error}")
+            logger.info("Using default model: gemini-1.5-flash-latest")
 
         if not model_id:
-            model_id = 'gemini-1.5-flash-latest'
+            model_id = 'gemini-2.5-flash'  # Default to latest stable model
 
         # Use same model for both
         model_organize = model_id
@@ -763,23 +861,23 @@ def init_clients():
 
         # Verify connections
         account_org = dbx_organize.users_get_current_account()
-        print(f"✅ Dropbox Organize: {account_org.name.display_name}")
+        logger.info(f"✅ Dropbox Organize: {account_org.name.display_name}")
 
         account_ana = dbx_analyze.users_get_current_account()
-        print(f"✅ Dropbox Analyze: {account_ana.name.display_name}")
+        logger.info(f"✅ Dropbox Analyze: {account_ana.name.display_name}")
 
         account_tgt = dbx_target.users_get_current_account()
-        print(f"✅ Dropbox Target: {account_tgt.name.display_name}")
+        logger.info(f"✅ Dropbox Target: {account_tgt.name.display_name}")
 
-        print(f"✅ Gemini Organize: {model_organize}")
-        print(f"✅ Gemini Analyze: {model_analyze}")
+        logger.info(f"✅ Gemini Organize: {model_organize}")
+        logger.info(f"✅ Gemini Analyze: {model_analyze}")
 
         # Ensure organized folder exists
         try:
             dbx_organize.files_get_metadata(ORGANIZED_FOLDER_PREFIX)
         except dropbox.exceptions.ApiError:
             dbx_organize.files_create_folder_v2(ORGANIZED_FOLDER_PREFIX)
-            print(f"📁 Created {ORGANIZED_FOLDER_PREFIX}")
+            logger.info(f"📁 Created {ORGANIZED_FOLDER_PREFIX}")
 
         # Ensure CSV exists
         ensure_csv_exists(dbx_target)
@@ -795,7 +893,7 @@ def init_clients():
         }
 
     except Exception as e:
-        print(f"❌ Initialization error: {e}")
+        logger.error(f"❌ Initialization error: {e}", exc_info=True)
         return None
 
 
@@ -803,7 +901,8 @@ def init_clients():
 # PDF TEXT EXTRACTION WITH OCR
 # ============================================================================
 
-def extract_text_with_ocr(pdf_bytes, gemini_client, model, initial_pages=5) -> Tuple[str, dict]:
+def extract_text_with_ocr(pdf_bytes: bytes, gemini_client, model: str, 
+                          initial_pages: int = INITIAL_PAGES_TO_SCAN) -> Tuple[str, dict]:
     """Extract text from PDF with OCR fallback for scanned documents"""
     try:
         full_text = ""
@@ -828,9 +927,9 @@ def extract_text_with_ocr(pdf_bytes, gemini_client, model, initial_pages=5) -> T
         cleaned_text = ' '.join(full_text.split())
 
         # Check if we have enough text - if not, use OCR
-        if len(cleaned_text) < 200 and total_pages > 0:
-            print(f"   ⚠️  Little text found ({len(cleaned_text)} chars)")
-            print(f"   📸 Scanned document detected - using OCR...")
+        if len(cleaned_text) < MIN_TEXT_LENGTH and total_pages > 0:
+            logger.warning(f"   ⚠️  Little text found ({len(cleaned_text)} chars)")
+            logger.info(f"   📸 Scanned document detected - using OCR...")
 
             extraction_method = "ocr"
 
@@ -838,29 +937,29 @@ def extract_text_with_ocr(pdf_bytes, gemini_client, model, initial_pages=5) -> T
                 doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                 image_data = []
 
-                pages_to_ocr = min(3, total_pages)
+                pages_to_ocr = min(OCR_PAGES_LIMIT, total_pages)
                 for page_num in range(pages_to_ocr):
                     page = doc[page_num]
-                    # Convert page to image at 200 DPI
-                    pix = page.get_pixmap(dpi=200)
+                    # Convert page to image at specified DPI
+                    pix = page.get_pixmap(dpi=OCR_DPI)
                     # Get PNG bytes
                     img_bytes = pix.tobytes("png")
                     image_data.append(img_bytes)
 
                 doc.close()
 
-                print(f"   🔍 Running OCR on {len(image_data)} page(s)...")
+                logger.info(f"   🔍 Running OCR on {len(image_data)} page(s)...")
 
                 ocr_text = extract_text_vision(image_data, gemini_client, model)
 
                 if ocr_text and len(ocr_text) > 100:
                     cleaned_text = ocr_text
-                    print(f"   ✓ OCR successful: {len(cleaned_text)} characters")
+                    logger.info(f"   ✓ OCR successful: {len(cleaned_text)} characters")
                 else:
-                    print(f"   ⚠️  OCR yielded little text")
+                    logger.warning(f"   ⚠️  OCR yielded little text")
 
             except Exception as ocr_error:
-                print(f"   ❌ OCR error: {ocr_error}")
+                logger.error(f"   ❌ OCR error: {ocr_error}", exc_info=True)
 
         # Smart extra scanning
         need_more = False
@@ -872,11 +971,11 @@ def extract_text_with_ocr(pdf_bytes, gemini_client, model, initial_pages=5) -> T
                 need_more = True
 
         if need_more and total_pages > initial_pages and extraction_method == "text":
-            print(f"   📖 Scanning extra pages...")
+            logger.info(f"   📖 Scanning extra pages...")
 
             with io.BytesIO(pdf_bytes) as pdf_file:
                 with pdfplumber.open(pdf_file) as pdf:
-                    max_scan = min(15, total_pages)
+                    max_scan = min(MAX_PAGES_TO_SCAN, total_pages)
                     for i in range(initial_pages, max_scan):
                         try:
                             page_text = pdf.pages[i].extract_text() or ""
@@ -902,7 +1001,7 @@ def extract_text_with_ocr(pdf_bytes, gemini_client, model, initial_pages=5) -> T
         return cleaned_text, metadata
 
     except Exception as e:
-        print(f"⚠️  Extraction error: {e}")
+        logger.error(f"⚠️  Extraction error: {e}", exc_info=True)
         return "", {'error': str(e)}
 def extract_text_vision(images: List[bytes], gemini_client, model) -> str:
     """Extract text from images with Gemini Vision API"""
@@ -947,7 +1046,7 @@ def smart_classify(text: str, filename: str, current_location: str,
                    existing_folders: str, gemini_client, model, pdf_metadata: dict) -> Optional[Dict]:
     """AI decides folder structure with STRICT differentiation"""
 
-    text_sample = text[:3500] if len(text) > 3500 else text
+    text_sample = text[:TEXT_SAMPLE_SIZE] if len(text) > TEXT_SAMPLE_SIZE else text
 
     extraction_method = pdf_metadata.get('extraction_method', 'text')
     method_note = " (OCR used)" if extraction_method == "ocr" else ""
@@ -1202,8 +1301,8 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                 # Extract text
                 text, pdf_metadata = extract_text_with_ocr(response.content, gemini, model)
 
-                if not text or len(text) < 30:
-                    print(f"⚠️  Insufficient text ({len(text)} chars) - skipping")
+                if not text or len(text) < MIN_TEXT_FOR_PROCESSING:
+                    logger.warning(f"⚠️  Insufficient text ({len(text)} chars) - skipping")
                     add_to_history(ORGANIZED_HISTORY, pdf_info['path'])
                     continue
 
@@ -1362,8 +1461,8 @@ def extract_contract_data(full_text, gemini_client, model):
     """
 
     # Split text in chunks voor betere extractie
-    text_chunk_1 = full_text[:20000]
-    text_chunk_2 = full_text[15000:35000] if len(full_text) > 15000 else ""
+    text_chunk_1 = full_text[:TEXT_CHUNK_1_SIZE]
+    text_chunk_2 = full_text[TEXT_CHUNK_OVERLAP:TEXT_CHUNK_2_SIZE] if len(full_text) > TEXT_CHUNK_OVERLAP else ""
 
     print("   🎯 Starting DEEP extraction (multi-stage)...")
 
@@ -1700,9 +1799,9 @@ ALLEEN JSON:"""
                     extracted_sections[stage_name] = {}
                     break
 
-        # Small delay tussen stages (rate limiting)
-        # 1. Verhoog base delay
-        time.sleep(5)  # Na elke stage
+        # Rate limiting tussen stages - 5 RPM = min 12 seconden tussen requests
+        # 7 stages per contract, dus min 12s tussen elke stage
+        time.sleep(12)  # Na elke stage - respecteert 5 RPM limiet
 
 
     # 3. Verlaag batch size
@@ -1875,8 +1974,8 @@ def calculate_confidence_normalized(normalized_data: dict, full_text: str,
 def generate_summary(full_text: str, doc_type: str, gemini_client, model) -> str:
     """Generate natural language summary using Gemini"""
 
-    # Use first 3000 chars for summary
-    text_sample = full_text[:3000] if len(full_text) > 3000 else full_text
+    # Use first N chars for summary
+    text_sample = full_text[:SUMMARY_TEXT_SIZE] if len(full_text) > SUMMARY_TEXT_SIZE else full_text
 
     prompt = f"""Maak een bondige samenvatting van dit {doc_type} in maximaal 3 korte alinea's.
 
@@ -1943,6 +2042,11 @@ def process_rental_contract(clients, pdf_info):
     dbx_target = clients['dbx_target']
     gemini = clients['gemini_analyze']
     model = clients['model_analyze']
+
+    # BELANGRIJK: Voeg direct toe aan history zodra processing start
+    # Dit voorkomt dat hetzelfde document meerdere keren wordt verwerkt
+    add_to_history(ANALYZED_HISTORY, pdf_info['path'])
+    print(f"   📝 Added to history: {pdf_info['path']}")
 
     try:
         print(f"\n{'='*70}")
@@ -2034,7 +2138,7 @@ def process_rental_contract(clients, pdf_info):
         # Log to CSV
         log_to_csv(dbx_target, pdf_info['name'], result, json_file, "success")
 
-        # Send email
+        # Send email - alleen als verwerking succesvol was
         conf = result['confidence']
 
         if conf['score'] >= TARGET_CONFIDENCE and not conf['needs_review']:
@@ -2214,6 +2318,9 @@ def analyze_rental_contracts(clients, analyzed_history):
 
         result = process_rental_contract(clients, pdf_info)
 
+        # Update history set in memory (document is al toegevoegd aan history file)
+        analyzed_history.add(pdf_info['path'])
+
         if result and result.get('quota_error'):
             quota_hit = True
             print(f"\n{'='*70}")
@@ -2225,15 +2332,14 @@ def analyze_rental_contracts(clients, analyzed_history):
             print(f"{'='*70}")
             break
 
+        # History is al toegevoegd aan het begin van process_rental_contract
         if result and result.get('success'):
-            print(f"   ✓ Adding to history: {pdf_info['path']}")
-            add_to_history(ANALYZED_HISTORY, pdf_info['path'])
             analyzed_count += 1
 
-        # Rate limiting
+        # Rate limiting - 5 RPM = min 12 seconden tussen contracten
         if i < len(new_pdfs) and not quota_hit:
-            print(f"\n⏳ Waiting 10s before next contract...")
-            time.sleep(10)
+            print(f"\n⏳ Waiting 15s before next contract (5 RPM limiet)...")
+            time.sleep(15)  # Extra buffer voor 5 RPM limiet
 
     if analyzed_count > 0:
         print(f"\n✅ Successfully analyzed {analyzed_count} contract(s)")
@@ -2255,10 +2361,10 @@ def main():
 ║  PHASE 1: Auto-organize PDFs with OCR support                       ║
 ║  PHASE 2: Analyze rental contracts → JSON                           ║
 ║                                                                      ║
-║  ✓ 3 Dropbox clients (organize/analyze/target)                      ║
-║  ✓ 2 Gemini clients (organize/analyze)                              ║
-║  ✓ Batch processing (max {BATCH_SIZE} per cycle)                         ║
-║  ✓ Robust error handling                                            ║
+║  ✓ 3 Dropbox clients (organize/analyze/target)                       ║
+║  ✓ 2 Gemini clients (organize/analyze)                               ║
+║  ✓ Batch processing (max {BATCH_SIZE} per cycle)                     ║
+║  ✓ Robust error handling                                             ║
 ╚══════════════════════════════════════════════════════════════════════╝
     """)
 
