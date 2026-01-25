@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "NODE_PATH=./node_modules next dev",
     "lint": "eslint .",
     "start": "next start",
     "start:all": "concurrently \"npm run dev\" \"cd .. && python3 allesfocusophuur.py\" --names \"Frontend,Backend\" --prefix-colors \"blue,green\"",
