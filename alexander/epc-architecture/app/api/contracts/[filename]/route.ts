@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
+import { logger } from '@/lib/logger';
+import { validateFilename } from '@/lib/validation';
 
 // Initialize Dropbox client for TARGET (JSON storage)
 async function getDropboxClient() {
@@ -11,12 +13,11 @@ async function getDropboxClient() {
     throw new Error('Dropbox TARGET credentials not configured');
   }
 
-  // Next.js server routes need explicit fetch
   const dbx = new Dropbox({
     clientId: APP_KEY_TARGET,
     clientSecret: APP_SECRET_TARGET,
     refreshToken: REFRESH_TOKEN_TARGET,
-    fetch: fetch, // Explicitly provide fetch for Next.js server routes
+    fetch: fetch,
   });
 
   return dbx;
@@ -30,10 +31,10 @@ export async function GET(
   try {
     const dbx = await getDropboxClient();
     
-    // Handle async params in Next.js 15+
     const resolvedParams = params instanceof Promise ? await params : params;
     
     if (!resolvedParams || !resolvedParams.filename) {
+      logger.error('Filename parameter is required', { params: resolvedParams });
       return NextResponse.json(
         { 
           error: 'Filename parameter is required',
@@ -45,105 +46,85 @@ export async function GET(
     
     const filename = decodeURIComponent(resolvedParams.filename);
     
+    // Validate filename
+    const validation = validateFilename(filename);
+    if (!validation.valid) {
+      logger.warn('Invalid filename provided', { filename, error: validation.error });
+      return NextResponse.json(
+        { 
+          error: validation.error || 'Invalid filename',
+          filename: filename
+        },
+        { status: 400 }
+      );
+    }
+    
     // First, try to find the file by listing and matching the name
-    // This ensures we use the correct path_display
     const listResult = await dbx.filesListFolder({ path: '' });
     const fileEntry = listResult.result.entries.find(
       (entry: any) => entry['.tag'] === 'file' && entry.name === filename
     );
 
-    let filePath: string;
-    
     if (!fileEntry) {
-      // If not found in listing, try direct path
-      filePath = `/${filename}`;
-      console.log(`File not found in listing, trying direct path: ${filePath}`);
-    } else {
-      // Use path_lower (preferred) or path_display from the file entry
-      // Dropbox API prefers path_lower for consistency
-      filePath = (fileEntry as any).path_lower || (fileEntry as any).path_display || `/${filename}`;
-      console.log(`Found file in listing. Using path: ${filePath}`);
-      console.log(`File entry details:`, {
-        name: (fileEntry as any).name,
-        path_lower: (fileEntry as any).path_lower,
-        path_display: (fileEntry as any).path_display
-      });
+      logger.warn('Contract file not found', { filename });
+      return NextResponse.json(
+        { 
+          error: `Bestand niet gevonden: ${filename}. Het bestand is mogelijk verplaatst of verwijderd.`,
+          filename: filename
+        },
+        { status: 404 }
+      );
     }
 
-    console.log(`Downloading contract from path: ${filePath}`);
+    // Download using the correct path
+    const downloadPath = fileEntry.path_lower || fileEntry.path_display;
+    const downloadResult = await dbx.filesDownload({ path: downloadPath });
+    const resultData = downloadResult.result as any;
 
-    // Download the file using the correct path
-    // Try path_lower first (Dropbox API preference), then path_display, then direct path
-    let result;
-    try {
-      result = await dbx.filesDownload({ path: filePath });
-    } catch (pathError: any) {
-      // If path_lower fails, try path_display if we have it
-      if (fileEntry && (fileEntry as any).path_display && filePath !== (fileEntry as any).path_display) {
-        console.log(`Retrying with path_display: ${(fileEntry as any).path_display}`);
-        filePath = (fileEntry as any).path_display;
-        result = await dbx.filesDownload({ path: filePath });
-      } else {
-        throw pathError;
-      }
-    }
-    
-    // Convert file content to JSON
-    // Dropbox SDK can return fileBinary (Uint8Array) or fileContents (string)
-    const resultData = result.result as any;
-    console.log('Download result keys:', Object.keys(resultData));
-    console.log('File size from entry:', fileEntry ? (fileEntry as any).size : 'unknown');
-    
-    let fileContent: Uint8Array | string | null = null;
+    // Extract file content
     let text: string;
-    
-    // Try different ways to get the file content
-    if (resultData.fileBinary) {
-      fileContent = resultData.fileBinary;
-      console.log('Using fileBinary, type:', typeof fileContent, 'length:', fileContent.length);
-      text = Buffer.from(fileContent).toString('utf-8');
-    } else if (resultData.fileContents) {
-      fileContent = resultData.fileContents;
-      console.log('Using fileContents, type:', typeof fileContent);
-      text = typeof fileContent === 'string' ? fileContent : Buffer.from(fileContent).toString('utf-8');
-    } else if (resultData.fileBlob) {
-      // If it's a Blob, convert to text
-      console.log('Using fileBlob');
+
+    if (resultData.fileBlob) {
       const arrayBuffer = await resultData.fileBlob.arrayBuffer();
       text = Buffer.from(arrayBuffer).toString('utf-8');
+    } else if (resultData.fileBinary) {
+      text = Buffer.from(resultData.fileBinary).toString('utf-8');
+    } else if (resultData.fileContents) {
+      const fileContents = resultData.fileContents;
+      text = typeof fileContents === 'string' ? fileContents : Buffer.from(fileContents).toString('utf-8');
     } else {
-      // Try to find any content property
-      console.log('No standard content property found. Available keys:', Object.keys(resultData));
-      throw new Error(`File content is empty or in unexpected format. Available keys: ${Object.keys(resultData).join(', ')}`);
+      logger.error('No file content found', { filename, availableKeys: Object.keys(resultData) });
+      throw new Error(`File content is empty or in unexpected format for ${filename}`);
     }
     
     if (!text || text.length === 0) {
-      console.error('Text content is empty after conversion');
+      logger.error('Text content is empty after conversion', { filename });
       throw new Error('File content is empty after conversion');
     }
     
-    console.log(`File content length: ${text.length} characters`);
-    console.log(`First 200 chars: ${text.substring(0, 200)}`);
+    logger.debug('File content loaded', { 
+      filename, 
+      length: text.length,
+      preview: text.substring(0, 200)
+    });
     
     const jsonData = JSON.parse(text);
 
-    console.log(`Successfully loaded contract: ${filename}`);
+    logger.info('Successfully loaded contract', { filename });
     return NextResponse.json(jsonData);
-  } catch (error: any) {
-    console.error('Error fetching contract:', error);
-    
-    // Handle async params for error logging
+  } catch (error: unknown) {
     const resolvedParams = params instanceof Promise ? await params : params;
-    console.error('Filename:', resolvedParams?.filename);
     
-    // Check if it's a Dropbox API error
-    let errorMessage = error.message || 'Failed to fetch contract';
+    logger.error('Error fetching contract', error, { 
+      filename: resolvedParams?.filename 
+    });
+    
+    let errorMessage = error instanceof Error ? error.message : 'Failed to fetch contract';
     let statusCode = 500;
     
-    // Dropbox API errors can be in error.error or error.status
-    const dropboxError = error.error || error;
-    const errorStatus = dropboxError.status || error.status;
-    const errorCode = dropboxError['.tag'] || dropboxError.error_summary;
+    const dropboxError = (error as any)?.error || error;
+    const errorStatus = dropboxError?.status || (error as any)?.status;
+    const errorCode = dropboxError?.['.tag'] || dropboxError?.error_summary;
     
     if (errorStatus === 409 || errorStatus === 404 || errorCode === 'path/not_found') {
       statusCode = 404;
@@ -153,23 +134,185 @@ export async function GET(
       errorMessage = `Conflict bij ophalen bestand: ${resolvedParams?.filename || 'unknown'}. Probeer het opnieuw.`;
     }
     
-    console.error('Error details:', {
-      message: error.message,
-      status: errorStatus,
-      errorCode: errorCode,
-      error: dropboxError,
-      stack: error.stack
-    });
-    
     return NextResponse.json(
       { 
         error: errorMessage,
-        filename: resolvedParams?.filename || 'unknown',
-        details: error.toString(),
-        status: errorStatus || statusCode,
-        errorCode: errorCode
+        filename: resolvedParams?.filename || null
       },
       { status: statusCode }
+    );
+  }
+}
+
+// PATCH /api/contracts/[filename] - Update contract data
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ filename: string }> | { filename: string } }
+) {
+  try {
+    const dbx = await getDropboxClient();
+    
+    const resolvedParams = params instanceof Promise ? await params : params;
+    
+    if (!resolvedParams || !resolvedParams.filename) {
+      logger.error('Filename parameter is required', { params: resolvedParams });
+      return NextResponse.json(
+        { error: 'Filename parameter is required' },
+        { status: 400 }
+      );
+    }
+    
+    const filename = decodeURIComponent(resolvedParams.filename);
+    
+    // Validate filename
+    const validation = validateFilename(filename);
+    if (!validation.valid) {
+      logger.warn('Invalid filename provided', { filename, error: validation.error });
+      return NextResponse.json(
+        { error: validation.error || 'Invalid filename' },
+        { status: 400 }
+      );
+    }
+
+    // Get updated data from request body
+    const updatedData = await request.json();
+    
+    if (!updatedData || typeof updatedData !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid request body. Expected JSON object.' },
+        { status: 400 }
+      );
+    }
+
+    // Find the file and get current data to preserve original values
+    const listResult = await dbx.filesListFolder({ path: '' });
+    const fileEntry = listResult.result.entries.find(
+      (entry: any) => entry['.tag'] === 'file' && entry.name === filename
+    );
+
+    if (!fileEntry) {
+      return NextResponse.json(
+        { error: `File not found: ${filename}` },
+        { status: 404 }
+      );
+    }
+
+    // Get current file to preserve original data and edit history
+    const downloadPath = fileEntry.path_lower || fileEntry.path_display;
+    let originalData: any = {};
+    let editHistory: any[] = [];
+    
+    try {
+      const downloadResult = await dbx.filesDownload({ path: downloadPath });
+      const resultData = downloadResult.result as any;
+      
+      let text: string;
+      if (resultData.fileBlob) {
+        const arrayBuffer = await resultData.fileBlob.arrayBuffer();
+        text = Buffer.from(arrayBuffer).toString('utf-8');
+      } else if (resultData.fileBinary) {
+        text = Buffer.from(resultData.fileBinary).toString('utf-8');
+      } else if (resultData.fileContents) {
+        const fileContents = resultData.fileContents;
+        text = typeof fileContents === 'string' ? fileContents : Buffer.from(fileContents).toString('utf-8');
+      } else {
+        throw new Error('Could not read current file');
+      }
+      
+      originalData = JSON.parse(text);
+      
+      // Preserve edit history if it exists
+      if (originalData.edit_history && Array.isArray(originalData.edit_history)) {
+        editHistory = originalData.edit_history;
+      }
+    } catch (err) {
+      logger.warn('Could not read original file, creating new edit history', { error: err });
+    }
+
+    // Create new edit entry
+    const newEditEntry = {
+      timestamp: new Date().toISOString(),
+      edited_by: 'user', // In the future, get from auth
+      changes: {} as Record<string, { from: any; to: any }>
+    };
+
+    // Track what changed (compare with original if available)
+    if (originalData.contract_data) {
+      const originalContractData = originalData.contract_data;
+      const updatedContractData = updatedData.contract_data || {};
+      
+      // Compare sections
+      Object.keys(updatedContractData).forEach((section) => {
+        const originalSection = originalContractData[section] || {};
+        const updatedSection = updatedContractData[section] || {};
+        
+        Object.keys(updatedSection).forEach((key) => {
+          const originalValue = originalSection[key];
+          const updatedValue = updatedSection[key];
+          
+          if (JSON.stringify(originalValue) !== JSON.stringify(updatedValue)) {
+            newEditEntry.changes[`${section}.${key}`] = {
+              from: originalValue,
+              to: updatedValue
+            };
+          }
+        });
+      });
+    }
+
+    // Add to edit history
+    editHistory.push(newEditEntry);
+
+    // Merge updated data with original data, preserving important fields
+    const finalData = {
+      ...originalData, // Start with original to preserve everything
+      ...updatedData,  // Overwrite with updates
+      edited: {
+        timestamp: new Date().toISOString(),
+        edited_by: 'user',
+        last_edit: newEditEntry.timestamp,
+      },
+      edit_history: editHistory, // Preserve full edit history
+      manually_edited: true,
+      // Preserve original processed date
+      processed: originalData.processed || updatedData.processed || new Date().toISOString(),
+      // Preserve original filename and document_type
+      filename: originalData.filename || updatedData.filename,
+      document_type: originalData.document_type || updatedData.document_type,
+    };
+
+    // Upload updated JSON to Dropbox
+    const uploadPath = fileEntry.path_lower || fileEntry.path_display;
+    const jsonString = JSON.stringify(finalData, null, 2);
+    const buffer = Buffer.from(jsonString, 'utf-8');
+
+    await dbx.filesUpload({
+      path: uploadPath,
+      contents: buffer,
+      mode: { '.tag': 'overwrite' },
+    });
+
+    logger.info('Successfully updated contract in Dropbox', { 
+      filename,
+      changesCount: Object.keys(newEditEntry.changes).length,
+      editHistoryLength: editHistory.length
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: 'Contract updated successfully',
+      filename,
+    });
+
+  } catch (error: unknown) {
+    logger.error('Error updating contract', error);
+    
+    return NextResponse.json(
+      { 
+        error: 'Internal server error',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      },
+      { status: 500 }
     );
   }
 }

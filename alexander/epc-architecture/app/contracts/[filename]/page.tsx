@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -25,8 +26,15 @@ import {
   Calendar,
   Shield,
   Quote,
+  Upload,
+  Edit,
+  Save,
+  X,
+  Droplets,
+  Fuel,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
 
 interface ContractData {
   filename: string
@@ -152,11 +160,21 @@ const sectionLabels: Record<SectionKey, Record<string, string>> = {
 }
 
 function getContractStatus(contract: ContractData): DocumentStatus {
+  // Check if contract was manually edited
+  if ((contract as any).edited?.timestamp || (contract as any).manually_edited) {
+    return 'manually_edited'
+  }
   if (!contract.confidence) return 'pending'
+  
+  // Only "pushed" if confidence >= 95 (fully processed and approved)
   if (contract.confidence.score >= 95) return 'pushed'
-  if (contract.confidence.score >= 80) return 'parsed'
+  
+  // Everything below 95% needs review (even if parsed, it needs manual check)
   if (contract.confidence.score >= 60) return 'needs_review'
-  return 'error'
+  
+  // Below 60% is error or pending
+  if (contract.confidence.score > 0) return 'error'
+  return 'pending'
 }
 
 function getFieldValue(section: SectionKey, key: string, contractData: any): any {
@@ -199,50 +217,57 @@ export default function ContractDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedSection, setSelectedSection] = useState<SectionKey>('partijen')
   const [selectedField, setSelectedField] = useState<string | null>(null)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editedData, setEditedData] = useState<ContractData | null>(null)
+  const [pushingToWhise, setPushingToWhise] = useState(false)
+  const [whiseStatus, setWhiseStatus] = useState<{ pushed: boolean; message?: string } | null>(null)
+
+  const fetchContract = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const filenameParam = params?.filename
+      if (!filenameParam) {
+        setError('Bestandsnaam ontbreekt in de URL')
+        setLoading(false)
+        return
+      }
+
+      const filename = typeof filenameParam === 'string'
+        ? decodeURIComponent(filenameParam)
+        : decodeURIComponent(String(filenameParam))
+
+      if (!filename || filename === 'undefined') {
+        throw new Error('Ongeldige bestandsnaam')
+      }
+
+      const response = await fetch(`/api/contracts/${encodeURIComponent(filename)}`)
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      if (data.error) {
+        throw new Error(data.error)
+      }
+
+      // Only update contract if not currently editing (to prevent losing edits)
+      if (!isEditing) {
+        setContract(data)
+      }
+    } catch (err: any) {
+      console.error('Error loading contract:', err)
+      setError(err.message || 'Failed to load contract')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    const fetchContract = async () => {
-      try {
-        setLoading(true)
-        setError(null)
-
-        const filenameParam = params?.filename
-        if (!filenameParam) {
-          setError('Bestandsnaam ontbreekt in de URL')
-          setLoading(false)
-          return
-        }
-
-        const filename = typeof filenameParam === 'string'
-          ? decodeURIComponent(filenameParam)
-          : decodeURIComponent(String(filenameParam))
-
-        if (!filename || filename === 'undefined') {
-          throw new Error('Ongeldige bestandsnaam')
-        }
-
-        const response = await fetch(`/api/contracts/${encodeURIComponent(filename)}`)
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}))
-          throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
-        }
-
-        const data = await response.json()
-
-        if (data.error) {
-          throw new Error(data.error)
-        }
-
-        setContract(data)
-      } catch (err: any) {
-        console.error('Error loading contract:', err)
-        setError(err.message || 'Failed to load contract')
-      } finally {
-        setLoading(false)
-      }
-    }
-
     if (params && params.filename) {
       fetchContract()
     } else {
@@ -250,6 +275,201 @@ export default function ContractDetailPage() {
       setError('URL parameter ontbreekt')
     }
   }, [params])
+
+  // Auto-refresh every 30 seconds, but pause if user is editing
+  useEffect(() => {
+    if (isEditing) return // Don't auto-refresh while editing
+    
+    let intervalId: NodeJS.Timeout | null = null
+    
+    intervalId = setInterval(() => {
+      // Don't refresh if user is editing or typing
+      if (!isEditing && 
+          document.activeElement?.tagName !== 'INPUT' && 
+          document.activeElement?.tagName !== 'TEXTAREA') {
+        fetchContract()
+      }
+    }, 30000) // 30 seconds
+    
+    return () => {
+      if (intervalId) clearInterval(intervalId)
+    }
+  }, [isEditing, params])
+
+  // Check if contract was auto-pushed to Whise (check on load)
+  useEffect(() => {
+    if (contract) {
+      const confidence = contract.confidence?.score || 0
+      const wasAutoPushed = (contract as any).whise_pushed === true
+      
+      if (wasAutoPushed) {
+        setWhiseStatus({
+          pushed: true,
+          message: 'Automatisch gepusht naar Whise (confidence >= 95%)'
+        })
+      } else if (confidence >= 95) {
+        // Contract has high confidence but wasn't pushed yet
+        // This might happen if Whise API wasn't configured at processing time
+        setWhiseStatus({
+          pushed: false,
+          message: 'Klaar voor automatische push (wordt automatisch gepusht bij confidence >= 95%)'
+        })
+      }
+    }
+  }, [contract])
+
+  const handlePushToWhise = async (autoPush = false) => {
+    if (!contract) return
+
+    // Show info message that this feature is coming soon (bottom right, won't block)
+    toast.info('Whise Integratie', {
+      description: 'De Whise API integratie wordt momenteel ontwikkeld. Deze functionaliteit komt binnenkort beschikbaar!',
+      duration: 4000,
+    })
+    
+    // For now, don't make the API call
+    return
+
+    // TODO: Uncomment when Whise API is ready
+    /*
+    try {
+      setPushingToWhise(true)
+      const filenameParam = params?.filename
+      const filename = filenameParam
+        ? typeof filenameParam === 'string'
+          ? decodeURIComponent(filenameParam)
+          : decodeURIComponent(String(filenameParam))
+        : null
+
+      if (!filename) {
+        throw new Error('Filename not found')
+      }
+
+      const response = await fetch(`/api/contracts/${encodeURIComponent(filename)}/whise`, {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to push to Whise')
+      }
+
+      // Check if it was actually pushed or just ready
+      if (data.success && data.whiseId) {
+        setWhiseStatus({
+          pushed: true,
+          message: autoPush ? 'Automatisch gepusht naar Whise' : 'Succesvol gepusht naar Whise'
+        })
+        toast.success('Gepusht naar Whise', {
+          description: `Contract "${contract.filename}" is succesvol naar Whise gepusht.`,
+        })
+      } else if (data.note) {
+        // API not configured yet
+        setWhiseStatus({
+          pushed: false,
+          message: 'Klaar voor push (Whise API nog niet geconfigureerd)'
+        })
+        toast.info('Whise API niet geconfigureerd', {
+          description: 'Configureer WHISE_API_ENDPOINT en WHISE_API_TOKEN om te pushen.',
+        })
+      } else {
+        setWhiseStatus({
+          pushed: true,
+          message: data.message || 'Gepusht naar Whise'
+        })
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      setWhiseStatus({
+        pushed: false,
+        message: `Fout: ${errorMessage}`
+      })
+      toast.error('Fout bij pushen', {
+        description: errorMessage,
+      })
+    } finally {
+      setPushingToWhise(false)
+    }
+    */
+  }
+
+  const handleSave = async () => {
+    if (!editedData || !contract) {
+      toast.error('Geen data om op te slaan', {
+        description: 'Er zijn geen wijzigingen om op te slaan.',
+      })
+      return
+    }
+
+    try {
+      const filenameParam = params?.filename
+      const filename = filenameParam
+        ? typeof filenameParam === 'string'
+          ? decodeURIComponent(filenameParam)
+          : decodeURIComponent(String(filenameParam))
+        : null
+
+      if (!filename || filename === 'undefined') {
+        throw new Error('Bestandsnaam niet gevonden')
+      }
+
+      // Ensure contract_data exists
+      if (!editedData.contract_data) {
+        editedData.contract_data = {}
+      }
+
+      // Save to API
+      const response = await fetch(`/api/contracts/${encodeURIComponent(filename)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(editedData),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Fout bij opslaan van wijzigingen')
+      }
+
+      const result = await response.json()
+      
+      // Refresh contract data to get latest from server (with manually_edited flag)
+      const refreshResponse = await fetch(`/api/contracts/${encodeURIComponent(filename)}`)
+      if (refreshResponse.ok) {
+        const refreshedData = await refreshResponse.json()
+        setContract(refreshedData)
+        // Status will automatically update to 'manually_edited' via getContractStatus
+      } else {
+        // Fallback: update local state with manually_edited flag
+        setContract({
+          ...editedData,
+          manually_edited: true,
+          edited: {
+            timestamp: new Date().toISOString(),
+            edited_by: 'user',
+          },
+        })
+      }
+      
+      setIsEditing(false)
+      setEditedData(null)
+      
+      // Show beautiful success toast (bottom right, won't block buttons)
+      const contractName = editedData.contract_data?.pand?.adres || editedData.filename || contract.filename || 'Contract'
+      toast.success('Wijzigingen opgeslagen! ✨', {
+        description: `Je wijzigingen aan "${contractName}" zijn opgeslagen in Dropbox. De JSON file is bijgewerkt en alle aanpassingen zijn behouden.`,
+        duration: 4000,
+      })
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Onbekende fout'
+      toast.error('Fout bij opslaan', {
+        description: `Er is een fout opgetreden: ${errorMessage}`,
+        duration: 5000,
+      })
+    }
+  }
 
   if (loading) {
     return (
@@ -292,10 +512,11 @@ export default function ContractDetailPage() {
     )
   }
 
-  const contractData = contract.contract_data || {}
+  const displayContract = isEditing && editedData ? editedData : contract
+  const contractData = displayContract?.contract_data || {}
   const pand = contractData.pand || {}
-  const status = getContractStatus(contract)
-  const confidenceScore = contract.confidence?.score || 0
+  const status = getContractStatus(displayContract || contract)
+  const confidenceScore = displayContract?.confidence?.score || contract?.confidence?.score || 0
 
   const sections: { key: SectionKey; label: string; icon: any }[] = [
     { key: 'partijen', label: 'Partijen', icon: User },
@@ -306,8 +527,23 @@ export default function ContractDetailPage() {
     { key: 'juridisch', label: 'Juridisch', icon: Shield },
   ]
 
-  const selectedSectionData = contractData[selectedSection] || {}
+  // Get section data from editedData if editing, otherwise from contractData
+  const sourceData = isEditing && editedData ? (editedData.contract_data || {}) : contractData
+  const selectedSectionData = sourceData[selectedSection] || {}
   const selectedSectionLabels = sectionLabels[selectedSection] || {}
+  
+  // Debug log
+  if (isEditing) {
+    console.log('Section data check:', {
+      selectedSection,
+      isEditing,
+      hasEditedData: !!editedData,
+      hasSourceData: !!sourceData,
+      hasSectionData: !!selectedSectionData,
+      sectionKeys: Object.keys(selectedSectionData),
+      sectionLabelsKeys: Object.keys(selectedSectionLabels),
+    })
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -322,10 +558,20 @@ export default function ContractDetailPage() {
             </Button>
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-semibold text-foreground">
-                  {pand.adres || contract.filename || 'Contract Details'}
-                </h1>
-                <StatusBadge status={status} />
+                <div className="h-12 w-12 rounded-lg bg-gradient-to-br from-primary/20 to-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                  <Building2 className="h-6 w-6 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-2xl font-semibold text-foreground truncate">
+                    {pand.adres || contract.filename || 'Contract Details'}
+                  </h1>
+                  <div className="flex items-center gap-2 mt-1">
+                    <StatusBadge status={status} />
+                    <span className="text-xs text-muted-foreground">
+                      {contract.document_type || 'Huurcontract'}
+                    </span>
+                  </div>
+                </div>
               </div>
               <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground">
                 {pand.type && (
@@ -346,6 +592,97 @@ export default function ContractDetailPage() {
                 </span>
               </div>
             </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {!isEditing ? (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (!contract) {
+                      toast.error('Contract niet geladen', {
+                        description: 'Het contract kon niet worden geladen. Probeer de pagina te verversen.',
+                      })
+                      return
+                    }
+                    try {
+                      // Deep clone the contract to avoid reference issues
+                      const clonedContract = JSON.parse(JSON.stringify(contract))
+                      console.log('Edit mode activated, contract data:', {
+                        hasContract: !!contract,
+                        hasContractData: !!clonedContract.contract_data,
+                        sections: clonedContract.contract_data ? Object.keys(clonedContract.contract_data) : [],
+                        selectedSection,
+                        contractKeys: Object.keys(clonedContract),
+                      })
+                      
+                      // Set state - use functional updates to ensure correct order
+                      setEditedData(clonedContract)
+                      setIsEditing(true)
+                      
+                      console.log('State set - isEditing should be true, editedData should be set')
+                      
+                      // Don't show toast - it's in the way
+                      // toast.info('Edit mode ingeschakeld', {
+                      //   description: 'Je kunt nu velden aanpassen. Klik op "Save" om op te slaan.',
+                      //   duration: 3000,
+                      // })
+                    } catch (err) {
+                      console.error('Error activating edit mode:', err)
+                      toast.error('Fout bij activeren edit mode', {
+                        description: 'Kon contract data niet kopiëren. Probeer opnieuw.',
+                      })
+                    }
+                  }}
+                  className="gap-2"
+                  disabled={!contract || loading}
+                >
+                  <Edit className="h-4 w-4" />
+                  Edit
+                </Button>
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => handlePushToWhise(false)}
+                  disabled={pushingToWhise || !contract}
+                  className="gap-2"
+                >
+                  <Upload className={cn("h-4 w-4", pushingToWhise && "animate-spin")} />
+                  {pushingToWhise ? 'Pushen...' : 'Push naar Whise'}
+                </Button>
+                {whiseStatus?.pushed && (
+                  <Badge variant="outline" className="border-status-success text-status-success">
+                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                    Gepusht
+                  </Badge>
+                )}
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleSave}
+                  className="gap-2"
+                >
+                  <Save className="h-4 w-4" />
+                  Save
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setIsEditing(false)
+                    setEditedData(null)
+                  }}
+                  className="gap-2"
+                >
+                  <X className="h-4 w-4" />
+                  Cancel
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -410,27 +747,53 @@ export default function ContractDetailPage() {
             {selectedSectionData && Object.keys(selectedSectionData).length > 0 && (
               <Card className="bg-card border-border">
                 <CardHeader>
-                  <CardTitle className="text-foreground text-base">Extracted Fields</CardTitle>
+                  <CardTitle className="text-foreground text-base">
+                    Extracted Fields
+                    {isEditing && (
+                      <span className="ml-2 text-xs text-primary font-normal">
+                        (Edit Mode)
+                      </span>
+                    )}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
                     {Object.entries(selectedSectionLabels).map(([key, label]) => {
-                      const value = getFieldValue(selectedSection, key, contractData)
+                      // Get value from editedData if editing, otherwise from contractData
+                      const currentData = isEditing && editedData ? (editedData.contract_data || {}) : contractData
+                      const value = getFieldValue(selectedSection, key, currentData)
                       const displayValue = formatFieldValue(value)
                       const isEmpty = value === null || value === undefined || displayValue === 'N/A'
                       const needsReview = confidenceScore < 80
+
+                      // Get raw value for input (not formatted)
+                      // Use a state-based value if we're editing this specific field
+                      const rawValue = value === null || value === undefined ? '' : String(value)
 
                       return (
                         <div
                           key={key}
                           className={cn(
-                            'rounded-lg border p-4 transition-colors cursor-pointer',
+                            'rounded-lg border p-4 transition-colors',
+                            isEditing ? 'cursor-default' : 'cursor-pointer',
                             needsReview && isEmpty
                               ? 'border-status-warning/50 bg-status-warning/5'
                               : 'border-border bg-secondary/30',
-                            selectedField === key && 'ring-2 ring-primary',
+                            selectedField === key && !isEditing && 'ring-2 ring-primary',
+                            isEditing && 'ring-2 ring-primary border-primary/50',
                           )}
-                          onClick={() => setSelectedField(key)}
+                          onClick={(e) => {
+                            // Only handle click if not editing and not clicking on input
+                            if (!isEditing && !(e.target as HTMLElement).closest('input')) {
+                              setSelectedField(key)
+                            }
+                          }}
+                          onMouseDown={(e) => {
+                            // Prevent parent click when clicking on input area
+                            if (isEditing && (e.target as HTMLElement).tagName === 'INPUT') {
+                              e.stopPropagation()
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex-1 space-y-2">
@@ -445,27 +808,91 @@ export default function ContractDetailPage() {
                                   </Badge>
                                 )}
                               </div>
-                              <p className="text-foreground font-medium">{displayValue}</p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <div className="text-right">
-                                <div className="flex items-center gap-1">
-                                  <div className="h-2 w-12 rounded-full bg-secondary">
-                                    <div
-                                      className={cn(
-                                        'h-full rounded-full',
-                                        confidenceScore >= 90
-                                          ? 'bg-status-success'
-                                          : confidenceScore >= 80
-                                            ? 'bg-status-warning'
-                                            : 'bg-status-error',
-                                      )}
-                                      style={{ width: `${confidenceScore}%` }}
-                                    />
-                                  </div>
-                                  <span className="text-xs text-muted-foreground w-8">{confidenceScore}%</span>
-                                </div>
-                              </div>
+                              {isEditing && editedData ? (
+                                <input
+                                  type="text"
+                                  defaultValue={rawValue}
+                                  key={`${key}-${selectedSection}`}
+                                  onInput={(e) => {
+                                    const inputValue = (e.target as HTMLInputElement).value
+                                    
+                                    if (!editedData) return
+                                    
+                                    const newData = JSON.parse(JSON.stringify(editedData))
+                                    if (!newData.contract_data) newData.contract_data = {}
+                                    if (!newData.contract_data[selectedSection]) {
+                                      newData.contract_data[selectedSection] = {}
+                                    }
+                                    
+                                    const sectionData = newData.contract_data[selectedSection]
+                                    
+                                    if (key.includes('_')) {
+                                      const [parent, child] = key.split('_', 2)
+                                      if (selectedSection === 'partijen') {
+                                        if (!sectionData[parent]) sectionData[parent] = {}
+                                        sectionData[parent][child] = inputValue
+                                      } else if (selectedSection === 'financieel' && parent === 'waarborg') {
+                                        if (!sectionData.waarborg) sectionData.waarborg = {}
+                                        sectionData.waarborg[child] = inputValue
+                                      } else if (selectedSection === 'pand' && parent === 'kadaster') {
+                                        if (!sectionData.kadaster) sectionData.kadaster = {}
+                                        sectionData.kadaster[child] = inputValue
+                                      } else if (selectedSection === 'pand' && parent === 'epc') {
+                                        if (!sectionData.epc) sectionData.epc = {}
+                                        sectionData.epc[child] = inputValue
+                                      } else {
+                                        if (!sectionData[parent]) sectionData[parent] = {}
+                                        sectionData[parent][child] = inputValue
+                                      }
+                                    } else {
+                                      sectionData[key] = inputValue
+                                    }
+                                    
+                                    setEditedData(newData)
+                                  }}
+                                  onBlur={(e) => {
+                                    // Trim on blur
+                                    const inputValue = e.target.value.trim() || null
+                                    if (!editedData) return
+                                    
+                                    const newData = JSON.parse(JSON.stringify(editedData))
+                                    if (!newData.contract_data) newData.contract_data = {}
+                                    if (!newData.contract_data[selectedSection]) {
+                                      newData.contract_data[selectedSection] = {}
+                                    }
+                                    
+                                    const sectionData = newData.contract_data[selectedSection]
+                                    
+                                    if (key.includes('_')) {
+                                      const [parent, child] = key.split('_', 2)
+                                      if (selectedSection === 'partijen') {
+                                        if (!sectionData[parent]) sectionData[parent] = {}
+                                        sectionData[parent][child] = inputValue
+                                      } else if (selectedSection === 'financieel' && parent === 'waarborg') {
+                                        if (!sectionData.waarborg) sectionData.waarborg = {}
+                                        sectionData.waarborg[child] = inputValue
+                                      } else if (selectedSection === 'pand' && parent === 'kadaster') {
+                                        if (!sectionData.kadaster) sectionData.kadaster = {}
+                                        sectionData.kadaster[child] = inputValue
+                                      } else if (selectedSection === 'pand' && parent === 'epc') {
+                                        if (!sectionData.epc) sectionData.epc = {}
+                                        sectionData.epc[child] = inputValue
+                                      } else {
+                                        if (!sectionData[parent]) sectionData[parent] = {}
+                                        sectionData[parent][child] = inputValue
+                                      }
+                                    } else {
+                                      sectionData[key] = inputValue
+                                    }
+                                    
+                                    setEditedData(newData)
+                                  }}
+                                  className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  placeholder="Enter value..."
+                                />
+                              ) : (
+                                <p className="text-foreground font-medium">{displayValue}</p>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -492,6 +919,91 @@ export default function ContractDetailPage() {
 
           {/* Sidebar */}
           <div className="space-y-6">
+            {/* Contract Type Navigation */}
+            <Card className="bg-card border-border">
+              <CardHeader>
+                <CardTitle className="text-foreground text-sm font-medium">Document Types</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <Link 
+                  href="/contracts"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md bg-primary/10 text-primary font-medium text-sm hover:bg-primary/15 transition-colors"
+                >
+                  <FileText className="h-4 w-4" />
+                  Huurcontracten
+                </Link>
+                <Link 
+                  href="/contracts/eigendomstitel"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <FileText className="h-4 w-4" />
+                  Eigendomstitel
+                </Link>
+                <Link 
+                  href="/contracts/epc"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <Zap className="h-4 w-4" />
+                  Energieprestatiecertificaat
+                </Link>
+                <Link 
+                  href="/contracts/elektrische"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <Zap className="h-4 w-4" />
+                  Elektrische
+                </Link>
+                <Link 
+                  href="/contracts/bodemattest"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <FileText className="h-4 w-4" />
+                  Bodemattest
+                </Link>
+                <Link 
+                  href="/contracts/asbestattest"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <Shield className="h-4 w-4" />
+                  Asbestattest
+                </Link>
+                <Link 
+                  href="/contracts/stedenbouwkundig"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <MapPin className="h-4 w-4" />
+                  Stedenbouwkundig
+                </Link>
+                <Link 
+                  href="/contracts/kadastraal"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <MapPin className="h-4 w-4" />
+                  Kadastraal
+                </Link>
+                <Link 
+                  href="/contracts/post-interventiedossier"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <FileText className="h-4 w-4" />
+                  Post-interventiedossier
+                </Link>
+                <Link 
+                  href="/contracts/watertoets"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <Droplets className="h-4 w-4" />
+                  Watertoets
+                </Link>
+                <Link 
+                  href="/contracts/stookolietankattest"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
+                >
+                  <Fuel className="h-4 w-4" />
+                  Stookolietankattest
+                </Link>
+              </CardContent>
+            </Card>
             {/* Contract Summary */}
             <Card className="bg-card border-border">
               <CardHeader>
@@ -540,13 +1052,109 @@ export default function ContractDetailPage() {
                   </>
                 )}
                 {contractData.periodes?.ingangsdatum && (
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Start Date</span>
-                    <span className="text-foreground">{contractData.periodes.ingangsdatum}</span>
-                  </div>
+                  <>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Start Date</span>
+                      <span className="text-foreground">{contractData.periodes.ingangsdatum}</span>
+                    </div>
+                    <Separator className="bg-border" />
+                  </>
                 )}
+                
+                {/* Whise Status */}
+                <div className="mt-4 pt-4 border-t border-border">
+                  <div className="flex items-center justify-between text-sm mb-2">
+                    <span className="text-muted-foreground">Whise Status</span>
+                    {whiseStatus?.pushed ? (
+                      <Badge className="bg-status-success text-white">
+                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                        Gepusht
+                      </Badge>
+                    ) : confidenceScore >= 95 ? (
+                      <Badge variant="outline" className="border-status-success text-status-success">
+                        Klaar
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-muted text-muted-foreground">
+                        Wachtend
+                      </Badge>
+                    )}
+                  </div>
+                  {whiseStatus?.message && (
+                    <p className="text-xs text-muted-foreground mt-1">{whiseStatus.message}</p>
+                  )}
+                  {confidenceScore >= 95 && !whiseStatus?.pushed && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Wordt automatisch gepusht bij confidence &gt;= 95%
+                    </p>
+                  )}
+                </div>
               </CardContent>
             </Card>
+
+            {/* AI Generated Summary */}
+            {displayContract.summary && (
+              <Card className="bg-card border-border">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-foreground text-base">
+                    <Quote className="h-4 w-4" />
+                    AI Samenvatting
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="prose prose-sm max-w-none">
+                    <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+                      {displayContract.summary}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Edit History */}
+            {(displayContract as any).edit_history && Array.isArray((displayContract as any).edit_history) && (displayContract as any).edit_history.length > 0 && (
+              <Card className="bg-card border-border">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-foreground text-base">
+                    <Clock className="h-4 w-4" />
+                    Wijzigingsgeschiedenis
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {(displayContract as any).edit_history.slice().reverse().map((edit: any, index: number) => (
+                      <div key={index} className="text-sm border-l-2 border-primary/30 pl-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-medium text-foreground">
+                            {new Date(edit.timestamp).toLocaleString('nl-NL')}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            door {edit.edited_by || 'gebruiker'}
+                          </span>
+                        </div>
+                        {edit.changes && Object.keys(edit.changes).length > 0 && (
+                          <div className="mt-2 space-y-1 text-xs">
+                            {Object.entries(edit.changes).slice(0, 3).map(([field, change]: [string, any]) => (
+                              <div key={field} className="text-muted-foreground">
+                                <span className="font-medium">{field}:</span>{' '}
+                                <span className="line-through text-red-500/70">{String(change.from || 'leeg')}</span>
+                                {' → '}
+                                <span className="text-green-500/70">{String(change.to || 'leeg')}</span>
+                              </div>
+                            ))}
+                            {Object.keys(edit.changes).length > 3 && (
+                              <div className="text-muted-foreground">
+                                +{Object.keys(edit.changes).length - 3} meer wijzigingen
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Confidence Info */}
             <Card className="bg-card border-border">

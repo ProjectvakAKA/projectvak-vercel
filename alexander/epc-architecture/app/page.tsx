@@ -74,12 +74,19 @@ export default function HomePage() {
       <div className="flex-1 overflow-auto p-6">
         {/* Header */}
         <div className="mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Real Estate Document Parser
-          </h1>
-          <p className="text-xl text-gray-600">
-            Automatische analyse en extractie van huurcontracten uit Dropbox
-          </p>
+          <div className="flex items-center gap-4 mb-4">
+            <div className="h-16 w-16 rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border-2 border-primary/20 flex items-center justify-center shrink-0 shadow-sm">
+              <FileText className="h-8 w-8 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-4xl font-bold text-gray-900">
+                Document Hub
+              </h1>
+              <p className="text-xl text-gray-600 mt-2">
+                Automatische analyse en extractie van huurcontracten uit Dropbox
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Stats Grid */}

@@ -7,11 +7,21 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Inbox, Home, ChevronLeft, ChevronRight, Zap } from "lucide-react"
+import { Inbox, Home, ChevronLeft, ChevronRight, FileText, Building2, Zap, Shield, MapPin, Droplets, Fuel } from "lucide-react"
 
 const navigation = [
   { name: "Home", href: "/", icon: Home },
-  { name: "Contracts", href: "/contracts", icon: Inbox },
+  { name: "Huurcontracten", href: "/contracts", icon: FileText },
+  { name: "Eigendomstitel", href: "/contracts/eigendomstitel", icon: FileText },
+  { name: "Energieprestatiecertificaat", href: "/contracts/epc", icon: Zap },
+  { name: "Elektrische", href: "/contracts/elektrische", icon: Zap },
+  { name: "Bodemattest", href: "/contracts/bodemattest", icon: FileText },
+  { name: "Asbestattest", href: "/contracts/asbestattest", icon: Shield },
+  { name: "Stedenbouwkundig", href: "/contracts/stedenbouwkundig", icon: MapPin },
+  { name: "Kadastraal", href: "/contracts/kadastraal", icon: MapPin },
+  { name: "Post-interventiedossier", href: "/contracts/post-interventiedossier", icon: FileText },
+  { name: "Watertoets", href: "/contracts/watertoets", icon: Droplets },
+  { name: "Stookolietankattest", href: "/contracts/stookolietankattest", icon: Fuel },
 ]
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -30,10 +40,12 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
         {/* Logo */}
         <div className="flex h-14 items-center border-b border-border px-4">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Zap className="h-4 w-4 text-primary-foreground" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/80 shadow-sm">
+              <Building2 className="h-5 w-5 text-primary-foreground" />
             </div>
-            {!collapsed && <span className="font-semibold text-foreground">Contract Parser</span>}
+            {!collapsed && (
+              <span className="font-semibold text-foreground text-sm">Document Hub</span>
+            )}
           </div>
         </div>
 

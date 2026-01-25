@@ -12,7 +12,7 @@ export default function Navigation() {
             <div className="flex-shrink-0 flex items-center">
               <Link href="/" className="flex items-center gap-2 text-gray-900 font-semibold">
                 <Home className="w-5 h-5" />
-                <span>Real Estate Document Parser</span>
+                <span>Document Hub</span>
               </Link>
             </div>
             <div className="hidden sm:ml-6 sm:flex sm:space-x-8">

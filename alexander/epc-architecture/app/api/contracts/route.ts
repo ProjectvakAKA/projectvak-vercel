@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
+import { logger } from '@/lib/logger';
 
 // Initialize Dropbox client for TARGET (JSON storage)
 async function getDropboxClient() {
@@ -30,8 +31,9 @@ export async function GET() {
     // List all files in root (or specific folder)
     const result = await dbx.filesListFolder({ path: '' });
 
-    // Debug: log all files found
-    console.log(`Found ${result.result.entries.length} total files in Dropbox`);
+    logger.debug('Files found in Dropbox', { 
+      totalFiles: result.result.entries.length 
+    });
 
     // Filter for JSON files that start with "data_"
     const jsonFileEntries = result.result.entries
@@ -41,7 +43,9 @@ export async function GET() {
         entry.name.startsWith('data_')
       );
 
-    console.log(`Found ${jsonFileEntries.length} JSON contract files`);
+    logger.info('JSON contract files found', { 
+      count: jsonFileEntries.length 
+    });
 
     // Fetch JSON content for each file to extract pand adres
     const contractsWithData = await Promise.all(
@@ -68,7 +72,10 @@ export async function GET() {
             const fileContents = resultData.fileContents;
             text = typeof fileContents === 'string' ? fileContents : Buffer.from(fileContents).toString('utf-8');
           } else {
-            console.error(`No file content found for ${entry.name}. Available keys:`, Object.keys(resultData));
+            logger.error('No file content found', { 
+              filename: entry.name, 
+              availableKeys: Object.keys(resultData) 
+            });
             throw new Error(`File content is empty or in unexpected format for ${entry.name}`);
           }
           
@@ -97,9 +104,14 @@ export async function GET() {
             huurprijs: financieel.huurprijs || null,
             confidence: jsonData.confidence?.score || null,
             processed: jsonData.processed || entry.server_modified,
+            // Include manually_edited flag for status detection
+            manually_edited: jsonData.manually_edited || false,
+            edited: jsonData.edited || null,
+            // Include summary
+            summary: jsonData.summary || null,
           };
-        } catch (error: any) {
-          console.error(`Error loading ${entry.name}:`, error);
+          } catch (error: unknown) {
+            logger.error(`Error loading contract file`, error, { filename: entry.name });
           // Return basic info if JSON can't be loaded
           return {
             name: entry.name,
@@ -112,6 +124,9 @@ export async function GET() {
             huurprijs: null,
             confidence: null,
             processed: entry.server_modified,
+            manually_edited: false,
+            edited: null,
+            summary: null,
           };
         }
       })
@@ -127,8 +142,8 @@ export async function GET() {
       totalFiles: result.result.entries.length,
       jsonFilesCount: contractsWithData.length
     });
-  } catch (error: any) {
-    console.error('Error fetching contracts:', error);
+  } catch (error: unknown) {
+    logger.error('Error fetching contracts list', error);
     return NextResponse.json(
       { 
         error: error.message || 'Failed to fetch contracts',

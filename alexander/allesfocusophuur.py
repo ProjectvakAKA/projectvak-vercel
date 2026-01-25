@@ -166,7 +166,7 @@ def retry_on_failure(max_retries: int = MAX_RETRIES, wait_time: int = RETRY_WAIT
 # ============================================================================
 
 def validate_credentials() -> bool:
-    """Validate that all required credentials are loaded"""
+    """Validate that all required credentials are loaded and exit if missing"""
     required_creds = {
         'APP_KEY_SOURCE_FULL': APP_KEY_SOURCE_FULL,
         'APP_SECRET_SOURCE_FULL': APP_SECRET_SOURCE_FULL,
@@ -187,9 +187,22 @@ def validate_credentials() -> bool:
     missing = [key for key, value in required_creds.items() if not value]
     
     if missing:
-        logger.error(f"Missing required credentials: {', '.join(missing)}")
+        logger.error("=" * 60)
+        logger.error("❌ MISSING REQUIRED CREDENTIALS")
+        logger.error("=" * 60)
+        logger.error(f"Missing environment variables: {', '.join(missing)}")
+        logger.error("")
         logger.error("Please check your .env file and ensure all credentials are set.")
+        logger.error("See .env.example for a template.")
+        logger.error("=" * 60)
         return False
+    
+    # Validate email format if provided
+    if SENDER_EMAIL and '@' not in SENDER_EMAIL:
+        logger.warning(f"⚠️  SENDER_EMAIL format may be invalid: {SENDER_EMAIL}")
+    
+    if RECIPIENT_EMAIL[0] and '@' not in RECIPIENT_EMAIL[0]:
+        logger.warning(f"⚠️  RECIPIENT_EMAIL format may be invalid: {RECIPIENT_EMAIL[0]}")
     
     logger.info("✓ All credentials validated successfully")
     return True
@@ -709,9 +722,45 @@ def add_to_history(filename, path):
         print(f"⚠️  History update failed: {e}")
 
 
+def remove_from_history(filename, path):
+    """Remove file from history (to requeue for retry)"""
+    try:
+        # Read all lines
+        with open(filename, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Filter out the path to remove
+        filtered_lines = [line for line in lines if line.strip() != path]
+        
+        # Write back
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.writelines(filtered_lines)
+        
+        print(f"   🔄 Removed from history (requeued): {path}")
+    except FileNotFoundError:
+        # File doesn't exist, nothing to remove
+        pass
+    except Exception as e:
+        print(f"⚠️  Failed to remove from history: {e}")
+
+
 def is_quota_error(error_msg):
     error_str = str(error_msg).lower()
     return "429" in error_str or "quota" in error_str or "resource_exhausted" in error_str
+
+
+def is_api_key_error(error_msg):
+    """Check if error is related to invalid API key"""
+    error_str = str(error_msg).lower()
+    return (
+        "api key" in error_str or
+        "invalid api key" in error_str or
+        "authentication" in error_str or
+        "401" in error_str or
+        "403" in error_str or
+        "permission denied" in error_str or
+        "api_key_not_valid" in error_str
+    )
 
 
 def send_email(subject, body):
@@ -1790,6 +1839,9 @@ ALLEEN JSON:"""
                 error_msg = str(e)
                 if is_quota_error(error_msg):
                     return {"error": "QUOTA_EXCEEDED", "details": error_msg}
+                
+                if is_api_key_error(error_msg):
+                    return {"error": "API_KEY_ERROR", "details": error_msg}
 
                 if "429" in error_msg and attempt < 2:
                     print(f"         ⚠️  Rate limit - waiting...")
@@ -2008,6 +2060,10 @@ Geef ALLEEN de samenvatting (geen introductie):"""
             except Exception as e:
                 error_str = str(e)
 
+                # Check for API key errors
+                if is_api_key_error(error_str):
+                    return "API_KEY_ERROR"
+                
                 # Check for quota errors
                 if is_quota_error(error_str):
                     return "QUOTA_EXCEEDED"
@@ -2073,8 +2129,17 @@ def process_rental_contract(clients, pdf_info):
         contract_data = extract_contract_data(full_text, gemini, model)
 
         if contract_data.get('error') == 'QUOTA_EXCEEDED':
-            print(f"❌ QUOTA EXCEEDED - stopping analysis phase")
-            return {'quota_error': True}
+            print(f"❌ QUOTA EXCEEDED - requeuing document for retry")
+            # Remove from history so it will be retried later
+            remove_from_history(ANALYZED_HISTORY, pdf_info['path'])
+            return {'quota_error': True, 'requeue': True}
+        
+        if contract_data.get('error') == 'API_KEY_ERROR':
+            print(f"❌ API KEY ERROR - requeuing document for retry")
+            print(f"   Details: {contract_data.get('details', 'Unknown API key error')}")
+            # Remove from history so it will be retried when API key is fixed
+            remove_from_history(ANALYZED_HISTORY, pdf_info['path'])
+            return {'api_key_error': True, 'requeue': True}
 
         # Normalize data
         normalized_data = normalizer.normalize(contract_data)
@@ -2087,8 +2152,16 @@ def process_rental_contract(clients, pdf_info):
         summary = generate_summary(full_text, "huurovereenkomst", gemini, model)
 
         if "QUOTA_EXCEEDED" in summary:
-            print(f"❌ QUOTA EXCEEDED - stopping analysis phase")
-            return {'quota_error': True}
+            print(f"❌ QUOTA EXCEEDED - requeuing document for retry")
+            # Remove from history so it will be retried later
+            remove_from_history(ANALYZED_HISTORY, pdf_info['path'])
+            return {'quota_error': True, 'requeue': True}
+        
+        if "API_KEY_ERROR" in summary or is_api_key_error(summary):
+            print(f"❌ API KEY ERROR in summary - requeuing document for retry")
+            # Remove from history so it will be retried when API key is fixed
+            remove_from_history(ANALYZED_HISTORY, pdf_info['path'])
+            return {'api_key_error': True, 'requeue': True}
 
         processing_time = time.time() - start_time
 
@@ -2134,6 +2207,85 @@ def process_rental_contract(clients, pdf_info):
         )
 
         print(f"✅ JSON saved: {json_file}")
+
+        # Auto-push to Whise if confidence >= 95%
+        conf = confidence  # Define conf variable for consistency
+        if conf['score'] >= 95:
+            try:
+                print(f"🚀 Auto-pushing to Whise (confidence: {conf['score']}%)...")
+                
+                # Get Whise API credentials from environment
+                whise_api_endpoint = os.getenv('WHISE_API_ENDPOINT')
+                whise_api_token = os.getenv('WHISE_API_TOKEN')
+                
+                if whise_api_endpoint and whise_api_token:
+                    # Prepare Whise payload
+                    whise_payload = {
+                        'property_id': normalized_data.get('pand', {}).get('adres') or pdf_info['name'],
+                        'contract_data': {
+                            'huurprijs': normalized_data.get('financieel', {}).get('huurprijs'),
+                            'adres': normalized_data.get('pand', {}).get('adres'),
+                            'type': normalized_data.get('pand', {}).get('type'),
+                            'oppervlakte': normalized_data.get('pand', {}).get('oppervlakte'),
+                            'verhuurder': normalized_data.get('partijen', {}).get('verhuurder', {}).get('naam'),
+                            'huurder': normalized_data.get('partijen', {}).get('huurder', {}).get('naam'),
+                            'ingangsdatum': normalized_data.get('periodes', {}).get('ingangsdatum'),
+                            'einddatum': normalized_data.get('periodes', {}).get('einddatum'),
+                        },
+                        'metadata': {
+                            'filename': pdf_info['name'],
+                            'confidence': conf['score'],
+                            'processed': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'source': 'contract-system-auto'
+                        }
+                    }
+                    
+                    # Make HTTP POST request to Whise API
+                    try:
+                        import requests
+                    except ImportError:
+                        raise ImportError("'requests' library is required for Whise API. Install with: pip install requests")
+                    
+                    response = requests.post(
+                        whise_api_endpoint,
+                        headers={
+                            'Authorization': f'Bearer {whise_api_token}',
+                            'Content-Type': 'application/json'
+                        },
+                        json=whise_payload,
+                        timeout=30
+                    )
+                    
+                    if response.status_code == 200 or response.status_code == 201:
+                        whise_result = response.json()
+                        logger.info(f"✅ Successfully auto-pushed to Whise: {json_file} (Whise ID: {whise_result.get('id', 'N/A')})")
+                        print(f"✅ Automatisch gepusht naar Whise (ID: {whise_result.get('id', 'N/A')})")
+                        
+                        # Add whise_pushed flag to JSON data
+                        json_data['whise_pushed'] = True
+                        json_data['whise_id'] = whise_result.get('id')
+                        json_data['whise_pushed_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # Re-upload JSON with Whise metadata
+                        dbx_target.files_upload(
+                            json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
+                            json_file,
+                            mode=dropbox.files.WriteMode.overwrite
+                        )
+                    else:
+                        error_text = response.text
+                        logger.warning(f"⚠️  Whise API returned error: {response.status_code} - {error_text}")
+                        print(f"⚠️  Whise push failed: {response.status_code} - {error_text}")
+                else:
+                    logger.info(f"ℹ️  Whise API not configured (confidence: {conf['score']}%)")
+                    print(f"ℹ️  Whise API niet geconfigureerd - contract is klaar voor push (confidence: {conf['score']}%)")
+                    
+            except ImportError:
+                logger.warning("⚠️  'requests' library not installed. Install with: pip install requests")
+                print("⚠️  'requests' library niet geïnstalleerd. Installeer met: pip install requests")
+            except Exception as e:
+                logger.warning(f"Failed to auto-push to Whise: {e}")
+                print(f"⚠️  Auto-push naar Whise mislukt: {e}")
 
         # Log to CSV
         log_to_csv(dbx_target, pdf_info['name'], result, json_file, "success")
@@ -2242,8 +2394,25 @@ Automated Document Processing System
         return result
 
     except Exception as e:
-        print(f"❌ Processing error: {e}")
-        return None
+        error_msg = str(e)
+        print(f"❌ Processing error: {error_msg}")
+        
+        # Check if it's an API key error
+        if is_api_key_error(error_msg):
+            print(f"   🔄 API Key error detected - requeuing document for retry")
+            remove_from_history(ANALYZED_HISTORY, pdf_info['path'])
+            return {'api_key_error': True, 'requeue': True, 'error': error_msg}
+        
+        # Check if it's a quota error
+        if is_quota_error(error_msg):
+            print(f"   🔄 Quota error detected - requeuing document for retry")
+            remove_from_history(ANALYZED_HISTORY, pdf_info['path'])
+            return {'quota_error': True, 'requeue': True, 'error': error_msg}
+        
+        # For other errors, also requeue (but log the error)
+        print(f"   🔄 Unknown error - requeuing document for retry")
+        remove_from_history(ANALYZED_HISTORY, pdf_info['path'])
+        return {'error': True, 'requeue': True, 'error_msg': error_msg}
 
 
 # ============================================================================
@@ -2318,10 +2487,27 @@ def analyze_rental_contracts(clients, analyzed_history):
 
         result = process_rental_contract(clients, pdf_info)
 
-        # Update history set in memory (document is al toegevoegd aan history file)
-        analyzed_history.add(pdf_info['path'])
-
-        if result and result.get('quota_error'):
+        # Check if document was requeued (removed from history)
+        if result and result.get('requeue'):
+            # Document was requeued, don't add to history set
+            if result.get('api_key_error'):
+                print(f"\n⚠️  API KEY ERROR - Document requeued: {pdf_info['name']}")
+                print(f"   Will retry automatically when API key is fixed")
+            elif result.get('quota_error'):
+                print(f"\n⚠️  QUOTA EXCEEDED - Document requeued: {pdf_info['name']}")
+                print(f"   Will retry automatically when quota resets")
+            else:
+                print(f"\n⚠️  ERROR - Document requeued: {pdf_info['name']}")
+                print(f"   Will retry automatically in next cycle")
+            # Continue with next document (don't break)
+            continue
+        
+        # If document was successfully processed, update history set
+        if result and result.get('success'):
+            analyzed_history.add(pdf_info['path'])
+            analyzed_count += 1
+        elif result and result.get('quota_error') and not result.get('requeue'):
+            # Old quota error handling (without requeue)
             quota_hit = True
             print(f"\n{'='*70}")
             print(f"⚠️  GEMINI API QUOTA REACHED")
@@ -2331,10 +2517,9 @@ def analyze_rental_contracts(clients, analyzed_history):
             print(f"Remaining contracts will be processed in next cycle.")
             print(f"{'='*70}")
             break
-
-        # History is al toegevoegd aan het begin van process_rental_contract
-        if result and result.get('success'):
-            analyzed_count += 1
+        else:
+            # Document failed but wasn't requeued (shouldn't happen, but handle it)
+            analyzed_history.add(pdf_info['path'])
 
         # Rate limiting - 5 RPM = min 12 seconden tussen contracten
         if i < len(new_pdfs) and not quota_hit:
@@ -2427,4 +2612,12 @@ def main():
 
 
 if __name__ == "__main__":
+    # Validate credentials before starting
+    if not validate_credentials():
+        logger.error("Cannot start: Missing required credentials. Exiting.")
+        exit(1)
+    
+    logger.info("=" * 60)
+    logger.info("🚀 Starting Smart Contract System")
+    logger.info("=" * 60)
     main()
