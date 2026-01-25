@@ -1,0 +1,92 @@
+{
+  "/Georganiseerd": {
+    "name": "Georganiseerd",
+    "created": "2026-01-24T19:23:09.073522",
+    "description": "Auto-detected",
+    "file_count": 0
+  },
+  "/Georganiseerd/Contracten/Huurcontracten": {
+    "name": "Huurcontracten",
+    "created": "2026-01-24T19:35:44.398235",
+    "description": "Deze folder is bestemd voor alle huurovereenkomsten, inclusief woonhuur, handelshuur en studentenhuurcontracten, samen met eventuele bijlagen zoals plaatsbeschrijvingen en EPC's.",
+    "file_count": 13
+  },
+  "/Georganiseerd/Contracten": {
+    "name": "Contracten",
+    "created": "2026-01-24T19:36:47.621860",
+    "description": "Auto-detected",
+    "file_count": 0
+  },
+  "/Georganiseerd/Teksten": {
+    "name": "Teksten",
+    "created": "2026-01-24T19:37:12.496934",
+    "description": "Deze folder is bestemd voor algemene teksten, verhalen, essays, persoonlijke reflecties en andere niet-zakelijke geschriften die geen specifieke categorie hebben.",
+    "file_count": 3
+  },
+  "/Georganiseerd/Onderwijs/Bedrijfskunde": {
+    "name": "Bedrijfskunde",
+    "created": "2026-01-24T19:39:58.878522",
+    "description": "Deze folder is bestemd voor onderwijsmateriaal, zoals collegedictaten, studiegidsen, tentamenvoorbereidingen en academische papers, gerelateerd aan de discipline Bedrijfskunde en Informatica.",
+    "file_count": 5
+  },
+  "/Georganiseerd/Onderwijs": {
+    "name": "Onderwijs",
+    "created": "2026-01-24T19:40:13.695775",
+    "description": "Auto-detected",
+    "file_count": 0
+  },
+  "/Georganiseerd/Onderwijs/Frans": {
+    "name": "Frans",
+    "created": "2026-01-25T08:55:40.986659",
+    "description": "Onderwijsmateriaal en verklarende teksten in het Frans.",
+    "file_count": 1
+  },
+  "/Georganiseerd/Contracten/EPC_Diensten": {
+    "name": "EPC_Diensten",
+    "created": "2026-01-25T08:56:01.037367",
+    "description": "Deze folder is bestemd voor overeenkomsten en contracten met betrekking tot de opmaak, aanvraag of gerelateerde diensten voor Energieprestatiecertificaten (EPC's).",
+    "file_count": 1
+  },
+  "/Georganiseerd/Onderwijs/Bedrijfskunde_Engels": {
+    "name": "Bedrijfskunde_Engels",
+    "created": "2026-01-25T08:58:41.499479",
+    "description": "Onderwijsmateriaal en academische teksten in het Engels gerelateerd aan de discipline Bedrijfskunde en Informatica.",
+    "file_count": 1
+  },
+  "/Georganiseerd/Contracten/Geheimhoudingsovereenkomsten": {
+    "name": "Geheimhoudingsovereenkomsten",
+    "created": "2026-01-25T09:02:03.434296",
+    "description": "Deze folder is bestemd voor alle geheimhoudingsovereenkomsten (Non-Disclosure Agreements - NDA's).",
+    "file_count": 1
+  },
+  "/Georganiseerd/Contracten/Dienstverleningsovereenkomsten": {
+    "name": "Dienstverleningsovereenkomsten",
+    "created": "2026-01-25T09:02:21.661954",
+    "description": "Deze folder is bestemd voor algemene dienstverleningsovereenkomsten en servicecontracten, zoals consultancy-overeenkomsten, die niet onder een specifiekere categorie vallen.",
+    "file_count": 1
+  },
+  "/Georganiseerd/Facturen": {
+    "name": "Facturen",
+    "created": "2026-01-25T09:12:15.444877",
+    "description": "Deze folder is bestemd voor alle uitgaande en inkomende facturen.",
+    "file_count": 1
+  },
+  "/Georganiseerd/Contracten/Energieovereenkomsten": {
+    "name": "Energieovereenkomsten",
+    "created": "2026-01-25T10:26:23.705701",
+    "description": "Deze folder is bestemd voor overeenkomsten en contracten met betrekking tot de levering van elektriciteit en/of aardgas aan consumenten of bedrijven.",
+    "file_count": 1
+  },
+  "/Georganiseerd/Contracten/Huurcontract_Sjablonen": {
+    "name": "Huurcontract_Sjablonen",
+    "created": "2026-01-25T10:37:09.358057",
+    "description": "Deze folder is bestemd voor sjablonen en voorbeelden van huurcontracten.",
+    "file_count": 1
+  },
+  "/Georganiseerd/Reizen/Reisroutes_Engels": {
+    "name": "Reisroutes_Engels",
+    "created": "2026-01-25T17:30:16.849666",
+    "description": "Reisroutes en gedetailleerde reisplannen in het Engels.",
+    "file_count": 1
+  }
+}
