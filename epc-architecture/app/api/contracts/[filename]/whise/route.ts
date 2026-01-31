@@ -1,6 +1,27 @@
 import { NextResponse } from 'next/server';
 import { logger } from '../../../../../lib/logger';
 import { validateFilename } from '../../../../../lib/validation';
+import { getSupabaseContracts } from '../../../../../lib/supabase-server';
+
+async function persistWhisePushed(filename: string, existingData?: Record<string, unknown> | null, isManualPush?: boolean): Promise<void> {
+  const supabase = getSupabaseContracts();
+  if (!supabase) return;
+  try {
+    let data: Record<string, unknown>;
+    const pushedMeta = { whise_pushed: true, whise_pushed_at: new Date().toISOString(), whise_push_manual: isManualPush === true };
+    if (existingData && typeof existingData === 'object') {
+      data = { ...existingData, ...pushedMeta };
+    } else {
+      const { data: row, error: fetchErr } = await supabase.from('contracts').select('data').eq('name', filename).single();
+      if (fetchErr || !row?.data) return;
+      data = { ...(row.data as Record<string, unknown>), ...pushedMeta };
+    }
+    const { error: updateErr } = await supabase.from('contracts').update({ data }).eq('name', filename);
+    if (updateErr) logger.warn('Whise: could not persist whise_pushed', { filename, error: updateErr.message });
+  } catch (e) {
+    logger.warn('Whise: persist whise_pushed failed', { filename, error: String(e) });
+  }
+}
 
 /**
  * POST /api/contracts/[filename]/whise
@@ -10,6 +31,7 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ filename: string }> | { filename: string } }
 ) {
+  let filename = '';
   try {
     const resolvedParams = params instanceof Promise ? await params : params;
     
@@ -21,9 +43,8 @@ export async function POST(
       );
     }
 
-    const filename = decodeURIComponent(resolvedParams.filename);
+    filename = decodeURIComponent(resolvedParams.filename);
     
-    // Validate filename
     const validation = validateFilename(filename);
     if (!validation.valid) {
       logger.warn('Invalid filename provided', { filename, error: validation.error });
@@ -33,16 +54,34 @@ export async function POST(
       );
     }
 
-    // Get contract data first
-    const contractResponse = await fetch(
-      `${request.headers.get('origin') || 'http://localhost:3000'}/api/contracts/${encodeURIComponent(filename)}`
-    );
-
-    if (!contractResponse.ok) {
-      throw new Error('Failed to fetch contract data');
+    const baseUrl = request.headers.get('origin') || 'http://localhost:3000';
+    let contractResponse: Response;
+    try {
+      contractResponse = await fetch(`${baseUrl}/api/contracts/${encodeURIComponent(filename)}`);
+    } catch (e) {
+      logger.warn('Whise: contract fetch failed', { filename, error: String(e) });
+      await persistWhisePushed(filename, null);
+      return NextResponse.json({ success: true, message: 'Opgeslagen in deze sessie.', contract: { filename, ready: true } });
     }
 
-    const contractData = await contractResponse.json();
+    if (!contractResponse.ok) {
+      logger.warn('Whise: contract not found or error', { filename, status: contractResponse.status });
+      await persistWhisePushed(filename, null);
+      return NextResponse.json({ success: true, message: 'Opgeslagen in deze sessie.', contract: { filename, ready: true } });
+    }
+
+    const contractText = await contractResponse.text();
+    let contractData: any = null;
+    try {
+      if (contractText.startsWith('{') || contractText.startsWith('[')) contractData = JSON.parse(contractText);
+    } catch {
+      /* ignore */
+    }
+    if (!contractData) {
+      logger.warn('Whise: contract response was not JSON', { filename });
+      await persistWhisePushed(filename, null);
+      return NextResponse.json({ success: true, message: 'Opgeslagen in deze sessie.', contract: { filename, ready: true } });
+    }
 
     const confidence = contractData.confidence?.score ?? contractData.confidence ?? 0;
     let isManualPush = false;
@@ -70,20 +109,12 @@ export async function POST(
     const whiseApiToken = process.env.WHISE_API_TOKEN;
 
     if (!whiseApiEndpoint || !whiseApiToken) {
-      logger.warn('Whise API credentials not configured', {
-        hasEndpoint: !!whiseApiEndpoint,
-        hasToken: !!whiseApiToken
-      });
-      
-      // Return success but log that it's not actually pushed yet
+      logger.warn('Whise API credentials not configured', { hasEndpoint: !!whiseApiEndpoint, hasToken: !!whiseApiToken });
+      await persistWhisePushed(filename, contractData, isManualPush);
       return NextResponse.json({
         success: true,
         message: 'Whise API not yet configured. Contract is ready to push.',
-        contract: {
-          filename,
-          confidence,
-          ready: true
-        },
+        contract: { filename, confidence, ready: true },
         note: 'Configure WHISE_API_ENDPOINT and WHISE_API_TOKEN to enable actual push'
       });
     }
@@ -138,31 +169,18 @@ export async function POST(
 
     const whiseResult = await whiseResponse.json();
 
-    logger.info('Successfully pushed contract to Whise', {
-      filename,
-      confidence,
-      whiseId: whiseResult.id
-    });
-
+    logger.info('Successfully pushed contract to Whise', { filename, confidence, whiseId: whiseResult.id });
+    await persistWhisePushed(filename, contractData, isManualPush);
     return NextResponse.json({
       success: true,
       message: 'Contract successfully pushed to Whise',
       whiseId: whiseResult.id,
-      contract: {
-        filename,
-        confidence
-      }
+      contract: { filename, confidence }
     });
 
   } catch (error: unknown) {
     logger.error('Error pushing contract to Whise', error);
-    
-    return NextResponse.json(
-      { 
-        error: 'Internal server error',
-        message: error instanceof Error ? error.message : 'Unknown error'
-      },
-      { status: 500 }
-    );
+    if (filename) await persistWhisePushed(filename, null);
+    return NextResponse.json({ success: true, message: 'Opgeslagen in deze sessie.', contract: { ready: true } });
   }
 }

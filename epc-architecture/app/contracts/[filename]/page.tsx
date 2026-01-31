@@ -296,20 +296,19 @@ export default function ContractDetailPage() {
     }
   }, [isEditing, params])
 
-  // Check if contract was auto-pushed to Whise (check on load)
+  // Check if contract was pushed to Whise (auto or manual) (check on load)
   useEffect(() => {
     if (contract) {
       const confidence = contract.confidence?.score || 0
-      const wasAutoPushed = (contract as any).whise_pushed === true
-      
-      if (wasAutoPushed) {
+      const wasPushed = (contract as any).whise_pushed === true
+      const wasManualPush = (contract as any).whise_push_manual === true
+
+      if (wasPushed) {
         setWhiseStatus({
           pushed: true,
-          message: 'Automatisch gepusht naar Whise (confidence >= 95%)'
+          message: wasManualPush ? 'Handmatig gepusht naar Whise' : 'Automatisch gepusht naar Whise (confidence >= 95%)'
         })
       } else if (confidence >= 95) {
-        // Contract has high confidence but wasn't pushed yet
-        // This might happen if Whise API wasn't configured at processing time
         setWhiseStatus({
           pushed: false,
           message: 'Klaar voor automatische push (wordt automatisch gepusht bij confidence >= 95%)'
@@ -361,7 +360,7 @@ export default function ContractDetailPage() {
       if (data.success && data.whiseId) {
         setWhiseStatus({
           pushed: true,
-          message: autoPush ? 'Automatisch gepusht naar Whise' : 'Succesvol gepusht naar Whise'
+          message: autoPush ? 'Automatisch gepusht naar Whise' : 'Handmatig gepusht naar Whise'
         })
         toast.success('Gepusht naar Whise', {
           description: `Contract "${contract.filename}" is succesvol naar Whise gepusht.`,
@@ -597,69 +596,52 @@ export default function ContractDetailPage() {
           </div>
           <div className="flex items-center gap-2">
             {!isEditing ? (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (!contract) {
-                      toast.error('Contract niet geladen', {
-                        description: 'Het contract kon niet worden geladen. Probeer de pagina te verversen.',
-                      })
-                      return
-                    }
-                    try {
-                      // Deep clone the contract to avoid reference issues
-                      const clonedContract = JSON.parse(JSON.stringify(contract))
-                      console.log('Edit mode activated, contract data:', {
-                        hasContract: !!contract,
-                        hasContractData: !!clonedContract.contract_data,
-                        sections: clonedContract.contract_data ? Object.keys(clonedContract.contract_data) : [],
-                        selectedSection,
-                        contractKeys: Object.keys(clonedContract),
-                      })
-                      
-                      // Set state - use functional updates to ensure correct order
-                      setEditedData(clonedContract)
-                      setIsEditing(true)
-                      
-                      console.log('State set - isEditing should be true, editedData should be set')
-                      
-                      // Don't show toast - it's in the way
-                      // toast.info('Edit mode ingeschakeld', {
-                      //   description: 'Je kunt nu velden aanpassen. Klik op "Save" om op te slaan.',
-                      //   duration: 3000,
-                      // })
-                    } catch (err) {
-                      console.error('Error activating edit mode:', err)
-                      toast.error('Fout bij activeren edit mode', {
-                        description: 'Kon contract data niet kopiëren. Probeer opnieuw.',
-                      })
-                    }
-                  }}
-                  className="gap-2"
-                  disabled={!contract || loading}
-                >
-                  <Edit className="h-4 w-4" />
-                  Edit
-                </Button>
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={() => handlePushToWhise(false)}
-                  disabled={pushingToWhise || !contract}
-                  className="gap-2"
-                >
-                  <Upload className={cn("h-4 w-4", pushingToWhise && "animate-spin")} />
-                  {pushingToWhise ? 'Pushen...' : 'Push naar Whise'}
-                </Button>
-                {whiseStatus?.pushed && (
-                  <Badge variant="outline" className="border-status-success text-status-success">
-                    <CheckCircle2 className="h-3 w-3 mr-1" />
-                    Gepusht
-                  </Badge>
-                )}
-              </>
+              (confidenceScore >= 95 || whiseStatus?.pushed) ? (
+                <Badge variant="outline" className="border-status-success text-status-success gap-1.5 px-3 py-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {(contract as any)?.whise_push_manual === true ? 'Handmatig gepusht naar Whise' : (confidenceScore >= 95 ? 'Automatisch gepusht naar Whise' : 'Gepusht naar Whise')}
+                </Badge>
+              ) : (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (!contract) {
+                        toast.error('Contract niet geladen', {
+                          description: 'Het contract kon niet worden geladen. Probeer de pagina te verversen.',
+                        })
+                        return
+                      }
+                      try {
+                        const clonedContract = JSON.parse(JSON.stringify(contract))
+                        setEditedData(clonedContract)
+                        setIsEditing(true)
+                      } catch (err) {
+                        console.error('Error activating edit mode:', err)
+                        toast.error('Fout bij activeren edit mode', {
+                          description: 'Kon contract data niet kopiëren. Probeer opnieuw.',
+                        })
+                      }
+                    }}
+                    className="gap-2"
+                    disabled={!contract || loading}
+                  >
+                    <Edit className="h-4 w-4" />
+                    Edit
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => handlePushToWhise(false)}
+                    disabled={pushingToWhise || !contract}
+                    className="gap-2"
+                  >
+                    <Upload className={cn("h-4 w-4", pushingToWhise && "animate-spin")} />
+                    {pushingToWhise ? 'Pushen...' : 'Push naar Whise'}
+                  </Button>
+                </>
+              )
             ) : (
               <>
                 <Button

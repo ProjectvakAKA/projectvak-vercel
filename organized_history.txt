@@ -16,3 +16,7 @@
 /iets.pdf
 /Boston.pdf
 /documents19.pdf
+/documents20.pdf
+/documents20.1.pdf
+/documents20,1.pdf
+/documents21.pdf

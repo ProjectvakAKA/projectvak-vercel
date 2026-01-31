@@ -8,7 +8,7 @@ export function createSupabaseAdminClient() {
 
   if (!url || !serviceKey) {
     throw new Error(
-      "Missing Supabase: set SUPABASE_URL + SUPABASE_SERVICE_KEY (or NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY) in .env"
+      "Missing Supabase admin env vars. In the project root, add to .env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_KEY (or SUPABASE_SERVICE_ROLE_KEY). Get URL and service_role key from Supabase Dashboard → Settings → API. Then restart the dev server (npm run dev)."
     );
   }
 
