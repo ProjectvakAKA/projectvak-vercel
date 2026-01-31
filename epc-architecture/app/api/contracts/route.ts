@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
-import { logger } from '@/lib/logger';
-import { getSupabaseContracts } from '@/lib/supabase-server';
+import { logger } from '../../lib/logger';
+import { getSupabaseContracts } from '../../lib/supabase-server';
 
 // Initialize Dropbox client for TARGET (alleen nog voor fallback of CSV; JSON in Supabase)
 async function getDropboxClient() {
