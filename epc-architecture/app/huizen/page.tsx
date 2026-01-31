@@ -393,10 +393,10 @@ export default function HuizenPage() {
         </div>
       )}
 
-      {/* Content: niveau 1, 2 of 3 — op mobiel overflow-y-auto zodat lijst scrollt; op desktop overflow-hidden + ScrollArea */}
+      {/* Content: op mobiel min-h zodat lijst zichtbaar; overflow-y-auto voor scroll */}
       <div
         ref={contentRef}
-        className="flex-1 flex min-h-0 overflow-y-auto overflow-x-hidden md:overflow-hidden"
+        className="flex-1 flex min-h-[40vh] md:min-h-0 overflow-y-auto overflow-x-hidden md:overflow-hidden"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
         {(level === 1 || level === 2) && (
@@ -418,10 +418,10 @@ export default function HuizenPage() {
             {(level === 1 || (level === 2 && !level2HuizenCollapsed)) && (
             <div
               className={cn(
-                'flex flex-col shrink-0 min-h-0 transition-[width] duration-300 ease-out',
-                level === 1 ? 'border-0' : 'border-r border-border min-w-[120px]'
+                'flex flex-col min-h-0 transition-[width] duration-300 ease-out',
+                level === 1 ? 'border-0 flex-1 min-w-0 w-full' : 'shrink-0 border-r border-border min-w-[120px]'
               )}
-              style={{ width: level === 1 ? '100%' : `${panelWidths.left}%` }}
+              style={level === 1 ? undefined : { width: `${panelWidths.left}%` }}
             >
               {/* Header: niv1 = titel + uitleg, niv2 = terug + Huizen + (in/uitklappen) + Filters wissen */}
               <div className={cn('shrink-0 border-b border-border', level === 1 ? 'px-6 pt-4 pb-2' : '')}>
@@ -499,9 +499,9 @@ export default function HuizenPage() {
                   </p>
                 </div>
               )}
-              {/* Native scroll container: werkt op mobiel (touch); ScrollArea gaf problemen */}
+              {/* Native scroll container: min-h op mobiel zodat lijst altijd zichtbaar is */}
               <div
-                className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
+                className="flex-1 min-h-[50vh] md:min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
                 style={{ WebkitOverflowScrolling: 'touch' }}
               >
                 <div className={cn('space-y-1', level === 1 ? 'p-6' : 'p-2')}>
