@@ -396,10 +396,13 @@ export default function HuizenPage() {
         </div>
       )}
 
-      {/* Content: op mobiel block-flow (geen flex, lijst kan niet inkrimpen); op desktop flex */}
+      {/* Content: niveau 1 = flex-col; niveau 2 = één rij: huizen | 11 categorieën | rechterbalk */}
       <div
         ref={contentRef}
-        className="block md:flex md:flex-col md:flex-1 md:min-h-0 md:overflow-hidden md:overflow-x-hidden"
+        className={cn(
+          'block md:flex-1 md:min-h-0 md:overflow-hidden',
+          level === 1 ? 'md:flex md:flex-col md:overflow-x-hidden' : 'md:flex md:flex-row'
+        )}
       >
         {(level === 1 || level === 2) && (
           <>
@@ -657,10 +660,10 @@ export default function HuizenPage() {
               />
             )}
             {level === 1 ? null : selectedHuis ? (
-              <div className={cn('flex flex-1 min-w-0 min-h-0', prevLevelForAnimation === 3 ? 'huizen-level-back' : 'huizen-level-in')}>
-                <div className="flex-1 flex flex-col min-w-0 min-h-0 border-r border-border">
+              <div className={cn('flex flex-1 min-w-0 min-h-0 overflow-hidden', prevLevelForAnimation === 3 ? 'huizen-level-back' : 'huizen-level-in')}>
+                <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden border-r border-border">
                   <div className="h-10 px-4 flex items-center shrink-0 border-b border-border font-medium text-foreground">Categorieën — {selectedHuis.label}</div>
-                  <ScrollArea className="flex-1 min-h-0">
+                  <ScrollArea className="flex-1 min-h-0 overflow-y-auto">
                     <div className="p-4 grid gap-3">
                       {CATEGORIES.map((cat) => {
                         const docs = getContractsForCategory(selectedHuis.contracts, cat.id)
