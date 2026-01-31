@@ -333,7 +333,7 @@ export default function HuizenPage() {
   }
 
   return (
-    <div className="flex flex-col min-h-full md:h-full md:min-h-0">
+    <div className="block md:flex md:flex-col md:min-h-full md:h-full md:min-h-0">
       {/* Boven: stats alleen op niveau 1 en 2 — op niveau 3 verborgen voor meer ruimte aan velden */}
       {level !== 3 && (
         <div className="border-b border-border bg-card/50 px-3 py-1.5 shrink-0">
@@ -393,10 +393,10 @@ export default function HuizenPage() {
         </div>
       )}
 
-      {/* Content: op mobiel kolom + flow (main scrollt); op desktop rij + flex-1 + overflow-hidden */}
+      {/* Content: op mobiel block-flow (geen flex, lijst kan niet inkrimpen); op desktop flex */}
       <div
         ref={contentRef}
-        className="flex flex-col overflow-visible md:flex md:flex-1 md:min-h-0 md:overflow-hidden md:overflow-x-hidden"
+        className="block md:flex md:flex-col md:flex-1 md:min-h-0 md:overflow-hidden md:overflow-x-hidden"
       >
         {(level === 1 || level === 2) && (
           <>
@@ -417,7 +417,7 @@ export default function HuizenPage() {
             {(level === 1 || (level === 2 && !level2HuizenCollapsed)) && (
             <div
               className={cn(
-                'flex flex-col min-h-0 transition-[width] duration-300 ease-out',
+                'block md:flex md:flex-col min-h-0 transition-[width] duration-300 ease-out',
                 level === 1 ? 'border-0 min-w-0 w-full md:flex-1' : 'shrink-0 border-r border-border min-w-[120px]'
               )}
               style={level === 1 ? undefined : { width: `${panelWidths.left}%` }}
@@ -499,9 +499,9 @@ export default function HuizenPage() {
                   <p className="text-xs text-muted-foreground mt-1 md:hidden">Scroll naar beneden voor de lijst met panden.</p>
                 </div>
               )}
-              {/* Op mobiel: min-h zodat lijstblok altijd zichtbaar; op desktop: scroll-container */}
+              {/* Op mobiel: block met min-h, geen flex (lijst altijd zichtbaar); op desktop: scroll-container */}
               <div
-                className="min-h-[55vh] overflow-visible md:min-h-0 md:flex-1 md:overflow-y-auto md:overflow-x-hidden md:overscroll-contain"
+                className="block min-h-[60vh] md:min-h-0 md:flex-1 md:overflow-y-auto md:overflow-x-hidden md:overscroll-contain"
                 style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
               >
                 <div className={cn('space-y-1', level === 1 ? 'p-6' : 'p-2')}>

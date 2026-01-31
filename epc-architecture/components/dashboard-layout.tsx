@@ -27,7 +27,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <SidebarContext.Provider value={{ collapsed, setCollapsed }}>
-      <div className="flex h-screen bg-background min-w-0">
+      <div className="flex min-h-[100dvh] h-screen bg-background min-w-0">
         {/* Mobiele menuknop: alleen zichtbaar op kleine schermen */}
         <div className="md:hidden fixed top-0 left-0 right-0 z-40 h-10 flex items-center gap-2 px-3 border-b border-border bg-sidebar shrink-0">
           <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setMobileOpen(true)} title="Menu openen" aria-label="Menu openen">

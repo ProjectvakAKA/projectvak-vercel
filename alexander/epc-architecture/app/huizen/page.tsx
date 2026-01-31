@@ -333,7 +333,7 @@ export default function HuizenPage() {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="block md:flex md:flex-col md:min-h-full md:h-full md:min-h-0">
       {/* Boven: stats alleen op niveau 1 en 2 — op niveau 3 verborgen voor meer ruimte aan velden */}
       {level !== 3 && (
         <div className="border-b border-border bg-card/50 px-3 py-1.5 shrink-0">
@@ -393,11 +393,10 @@ export default function HuizenPage() {
         </div>
       )}
 
-      {/* Content: niveau 1, 2 of 3 — op mobiel overflow-y-auto zodat lijst scrollt; op desktop overflow-hidden + ScrollArea */}
+      {/* Content: op mobiel block-flow (geen flex, lijst zichtbaar); op desktop flex */}
       <div
         ref={contentRef}
-        className="flex-1 flex min-h-0 overflow-y-auto overflow-x-hidden md:overflow-hidden"
-        style={{ WebkitOverflowScrolling: 'touch' }}
+        className="block md:flex md:flex-col md:flex-1 md:min-h-0 md:overflow-hidden md:overflow-x-hidden"
       >
         {(level === 1 || level === 2) && (
           <>
@@ -418,10 +417,10 @@ export default function HuizenPage() {
             {(level === 1 || (level === 2 && !level2HuizenCollapsed)) && (
             <div
               className={cn(
-                'flex flex-col shrink-0 min-h-0 transition-[width] duration-300 ease-out',
-                level === 1 ? 'border-0' : 'border-r border-border min-w-[120px]'
+                'block md:flex md:flex-col min-h-0 transition-[width] duration-300 ease-out',
+                level === 1 ? 'border-0 min-w-0 w-full md:flex-1' : 'shrink-0 border-r border-border min-w-[120px]'
               )}
-              style={{ width: level === 1 ? '100%' : `${panelWidths.left}%` }}
+              style={level === 1 ? undefined : { width: `${panelWidths.left}%` }}
             >
               {/* Header: niv1 = titel + uitleg, niv2 = terug + Huizen + (in/uitklappen) + Filters wissen */}
               <div className={cn('shrink-0 border-b border-border', level === 1 ? 'px-6 pt-4 pb-2' : '')}>
@@ -497,9 +496,13 @@ export default function HuizenPage() {
                     {filteredAndSortedHuizen.length} van {huizenList.length} huizen
                     {(searchQuery.trim() || statusFilter !== 'all') && ' (gefilterd)'}
                   </p>
+                  <p className="text-xs text-muted-foreground mt-1 md:hidden">Scroll naar beneden voor de lijst met panden.</p>
                 </div>
               )}
-              <ScrollArea className="flex-1 min-h-0">
+              <div
+                className="block min-h-[60vh] md:min-h-0 md:flex-1 md:overflow-y-auto md:overflow-x-hidden"
+                style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+              >
                 <div className={cn('space-y-1', level === 1 ? 'p-6' : 'p-2')}>
                   {loading ? (
                     <div className="p-4 text-muted-foreground text-sm">Laden...</div>
@@ -638,7 +641,7 @@ export default function HuizenPage() {
                     </div>
                   )}
                 </div>
-              </ScrollArea>
+              </div>
             </div>
             )}
             {level === 2 && !level2HuizenCollapsed && (

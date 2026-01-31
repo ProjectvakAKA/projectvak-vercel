@@ -38,15 +38,17 @@ git push vercel main
 
 Je hebt twee apps in de repo. Kies één per Vercel-project.
 
-### Optie A – Alleen de contracts-app (aanbevolen als je die gebruikt)
+### Optie A – Document Hub-app (contracts, huizen, Account-knop) — aanbevolen
 
-- **Root Directory:** klik **Edit** → vul in: `alexander/epc-architecture` → **Save**.
-- Build draait dan in die map; dat is de contracts/Whise/Supabase-app.
+- **Root Directory:** klik **Edit** → vul in: **`epc-architecture`** (of `alexander/epc-architecture` als die map in je repo zo heet) → **Save**.
+- Build draait dan in die map: Document Hub-homepage met Account-knop, /huizen, Supabase/Whise.
 
-### Optie B – Alleen de hoofddashboard-app (root)
+**Geen Account-knop of Document Hub op Vercel?** → Root Directory staat waarschijnlijk leeg; zet op `epc-architecture` en doe een **Redeploy**.
+
+### Optie B – Hoofddashboard-app (root)
 
 - **Root Directory:** laat leeg.
-- Dan wordt de app in de root (`src/`, admin, Dropbox, etc.) gedeployed.
+- Dan wordt de app in de root (`src/`, Inbox, Connections, etc.) gedeployed — geen Document Hub, geen Account-knop op homepage.
 
 ### Beide apps live
 
