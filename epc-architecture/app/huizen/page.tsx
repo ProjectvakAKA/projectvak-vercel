@@ -496,11 +496,12 @@ export default function HuizenPage() {
                     {filteredAndSortedHuizen.length} van {huizenList.length} huizen
                     {(searchQuery.trim() || statusFilter !== 'all') && ' (gefilterd)'}
                   </p>
+                  <p className="text-xs text-muted-foreground mt-1 md:hidden">Scroll naar beneden voor de lijst met panden.</p>
                 </div>
               )}
-              {/* Op mobiel: lijst in flow (geen scroll-container); op desktop: scroll-container */}
+              {/* Op mobiel: min-h zodat lijstblok altijd zichtbaar; op desktop: scroll-container */}
               <div
-                className="overflow-visible md:flex-1 md:min-h-0 md:overflow-y-auto md:overflow-x-hidden md:overscroll-contain"
+                className="min-h-[55vh] overflow-visible md:min-h-0 md:flex-1 md:overflow-y-auto md:overflow-x-hidden md:overscroll-contain"
                 style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
               >
                 <div className={cn('space-y-1', level === 1 ? 'p-6' : 'p-2')}>
