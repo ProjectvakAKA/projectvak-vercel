@@ -1,37 +1,31 @@
-# 📁 Alexander's Work
+## PropertyDocs MVP
 
-Deze folder bevat alle code en documentatie van Alexander voor het HIRB Projectvak.
+Admin-only portal for configuring Dropbox sync, EPC parsing, and Whise write-back.
+Day-to-day workflows stay inside Whise/email.
 
-## 🚀 Snel starten
+## Getting Started
 
+1) Install dependencies:
 ```bash
-cd alexander
-./start-all.sh
+npm install
 ```
 
-Dit start zowel de Python backend als de Next.js frontend.
+2) Configure environment variables:
+```bash
+cp config/env.example .env.local
+```
 
-## 📂 Structuur
+3) Run the dev server:
+```bash
+npm run dev
+```
 
-- `allesfocusophuur.py` - Python backend voor document processing
-- `epc-architecture/` - Next.js frontend applicatie
-- `start-all.sh` - Script om alles te starten
-- `requirements.txt` - Python dependencies
-- `*.md` - Documentatie bestanden
+Open [http://localhost:3000](http://localhost:3000).
 
-## 🔧 Setup
+## Supabase schema
 
-Zie `HOW_TO_START.md` voor volledige setup instructies.
+Apply the SQL in `supabase/schema.sql` to set up orgs and org members with RLS.
 
-## 🔒 Veiligheid
-
-- `.env` files worden NIET gepusht (veilig!)
-- Alle credentials blijven lokaal
-- Gebruik `.env.example` als template
-
-## 📝 Voor teamleden
-
-1. Clone de repository
-2. Ga naar `alexander/` folder
-3. Volg de setup instructies in `HOW_TO_START.md`
-4. Start met `./start-all.sh`
+## Notes
+- `config/env.example` contains required env keys.
+- The app uses Supabase Auth and org-scoped access.
