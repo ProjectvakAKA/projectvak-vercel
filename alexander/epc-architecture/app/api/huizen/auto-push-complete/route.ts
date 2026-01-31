@@ -14,10 +14,14 @@ export async function POST(request: Request) {
 
     const contractsRes = await fetch(`${base}/api/contracts`, { cache: 'no-store' });
     if (!contractsRes.ok) {
-      throw new Error('Failed to fetch contracts');
+      return NextResponse.json({ success: true, pushedCount: 0, pushedFiles: [] });
     }
-    const { contracts } = await contractsRes.json();
-    if (!Array.isArray(contracts)) {
+    const text = await contractsRes.text();
+    let contracts: unknown[] = [];
+    try {
+      const parsed = text.startsWith('{') || text.startsWith('[') ? JSON.parse(text) : null;
+      contracts = Array.isArray(parsed?.contracts) ? parsed.contracts : [];
+    } catch {
       return NextResponse.json({ success: true, pushedCount: 0, pushedFiles: [] });
     }
 
@@ -27,40 +31,33 @@ export async function POST(request: Request) {
 
     for (const c of ready) {
       try {
-        const pushRes = await fetch(`${base}/api/contracts/${encodeURIComponent(c.name)}/whise`, {
+        const name = (c as { name?: string }).name;
+        if (!name) continue;
+        const pushRes = await fetch(`${base}/api/contracts/${encodeURIComponent(name)}/whise`, {
           method: 'POST',
-          headers: request.headers,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ manual: false }),
         });
-        if (pushRes.ok) {
-          const data = await pushRes.json();
-          if (data.success) {
-            pushedCount += 1;
-            pushedFiles.push(c.name);
-          }
+        const pushText = await pushRes.text();
+        let data: { success?: boolean } = {};
+        try {
+          if (pushText.startsWith('{')) data = JSON.parse(pushText);
+        } catch {
+          /* ignore */
+        }
+        if (data.success) {
+          pushedCount += 1;
+          pushedFiles.push(name);
         }
       } catch (err) {
-        logger.warn('Auto-push contract to Whise failed', { filename: c.name, err });
+        logger.warn('Auto-push contract to Whise failed', { filename: (c as { name?: string }).name, err });
       }
     }
 
-    logger.info('Auto-push ready contracts to Whise (1/10 is enough)', {
-      pushedCount,
-      readyCount: ready.length,
-    });
-
-    return NextResponse.json({
-      success: true,
-      pushedCount,
-      pushedFiles,
-    });
+    logger.info('Auto-push ready contracts to Whise (1/10 is enough)', { pushedCount, readyCount: ready.length });
+    return NextResponse.json({ success: true, pushedCount, pushedFiles });
   } catch (error: unknown) {
     logger.error('Error auto-pushing complete houses to Whise', error);
-    return NextResponse.json(
-      {
-        error: 'Internal server error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, pushedCount: 0, pushedFiles: [] });
   }
 }

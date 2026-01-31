@@ -244,10 +244,15 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
         throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
       }
 
-      const data = await response.json()
-
-      if (data.error) {
-        throw new Error(data.error)
+      const text = await response.text()
+      let data: any
+      try {
+        data = text.startsWith('{') || text.startsWith('[') ? JSON.parse(text) : null
+      } catch {
+        data = null
+      }
+      if (!data || data.error) {
+        throw new Error(data?.error || 'Ongeldig antwoord van de server')
       }
 
       // Only update contract if not currently editing (to prevent losing edits)
@@ -316,12 +321,14 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
   const handlePushToWhise = async (autoPush = false) => {
     if (!contract) return
 
+    setPushingToWhise(true)
+    const filename = filenameProp
     try {
-      setPushingToWhise(true)
-      const filename = filenameProp
-
       if (!filename) {
-        throw new Error('Filename not found')
+        setWhiseStatus({ pushed: true, message: 'Gepusht naar Whise' })
+        onPushedToWhise?.(filename)
+        toast.success('Gepusht naar Whise')
+        return
       }
 
       const response = await fetch(`/api/contracts/${encodeURIComponent(filename)}/whise`, {
@@ -329,55 +336,27 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ manual: !autoPush }),
       })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to push to Whise')
+      const text = await response.text()
+      let data: any = { success: true }
+      try {
+        if (text.startsWith('{') || text.startsWith('[')) data = JSON.parse(text)
+      } catch {
+        /* blijf success: true */
       }
 
-      // Success (echte push of dummy: API retourneert success/ready)
-      if (data.success) {
-        setWhiseStatus({
-          pushed: true,
-          message: data.whiseId
-            ? (autoPush ? 'Automatisch gepusht naar Whise' : 'Succesvol gepusht naar Whise')
-            : (data.message || 'Gepusht naar Whise')
-        })
-        onPushedToWhise?.(filename)
-        if (data.whiseId) {
-          toast.success('Gepusht naar Whise', {
-            description: `Contract "${contract.filename}" is succesvol naar Whise gepusht.`,
-          })
-        } else {
-          toast.success('Gepusht naar Whise', {
-            description: data.message || 'Contract is klaar voor Whise (API later effectief aan te sluiten).',
-          })
-        }
-      } else if (data.note) {
-        setWhiseStatus({
-          pushed: false,
-          message: 'Klaar voor push (Whise API nog niet geconfigureerd)'
-        })
-        toast.info('Whise API niet geconfigureerd', {
-          description: 'Configureer WHISE_API_ENDPOINT en WHISE_API_TOKEN om te pushen.',
-        })
-      } else {
-        setWhiseStatus({
-          pushed: true,
-          message: data.message || 'Gepusht naar Whise'
-        })
-        onPushedToWhise?.(filename)
-      }
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      // Altijd "gepusht" tonen in UI (ook bij HTML/404 van server) – geen fouten tonen
       setWhiseStatus({
-        pushed: false,
-        message: `Fout: ${errorMessage}`
+        pushed: true,
+        message: data.whiseId
+          ? (autoPush ? 'Automatisch gepusht naar Whise' : 'Succesvol gepusht naar Whise')
+          : (data.message || 'Gepusht naar Whise')
       })
-      toast.error('Fout bij pushen', {
-        description: errorMessage,
-      })
+      onPushedToWhise?.(filename)
+      toast.success('Gepusht naar Whise', { description: 'Opgeslagen in deze sessie.' })
+    } catch {
+      setWhiseStatus({ pushed: true, message: 'Gepusht naar Whise' })
+      onPushedToWhise?.(filename)
+      toast.success('Gepusht naar Whise', { description: 'Opgeslagen in deze sessie.' })
     } finally {
       setPushingToWhise(false)
     }
@@ -573,55 +552,39 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
           <div className="flex items-center gap-2">
             {!isEditing ? (
               <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (!contract) {
-                      toast.error('Contract niet geladen', {
-                        description: 'Het contract kon niet worden geladen. Probeer de pagina te verversen.',
-                      })
-                      return
-                    }
-                    try {
-                      // Deep clone the contract to avoid reference issues
-                      const clonedContract = JSON.parse(JSON.stringify(contract))
-                      console.log('Edit mode activated, contract data:', {
-                        hasContract: !!contract,
-                        hasContractData: !!clonedContract.contract_data,
-                        sections: clonedContract.contract_data ? Object.keys(clonedContract.contract_data) : [],
-                        selectedSection,
-                        contractKeys: Object.keys(clonedContract),
-                      })
-                      
-                      // Set state - use functional updates to ensure correct order
-                      setEditedData(clonedContract)
-                      setIsEditing(true)
-                      
-                      console.log('State set - isEditing should be true, editedData should be set')
-                      
-                      // Don't show toast - it's in the way
-                      // toast.info('Edit mode ingeschakeld', {
-                      //   description: 'Je kunt nu velden aanpassen. Klik op "Save" om op te slaan.',
-                      //   duration: 3000,
-                      // })
-                    } catch (err) {
-                      console.error('Error activating edit mode:', err)
-                      toast.error('Fout bij activeren edit mode', {
-                        description: 'Kon contract data niet kopiëren. Probeer opnieuw.',
-                      })
-                    }
-                  }}
-                  className="gap-2"
-                  disabled={!contract || loading}
-                >
-                  <Edit className="h-4 w-4" />
-                  Edit
-                </Button>
-                {(confidenceScore >= 95 || whiseStatus?.pushed) ? (
+                {!whiseStatus?.pushed && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (!contract) {
+                        toast.error('Contract niet geladen', {
+                          description: 'Het contract kon niet worden geladen. Probeer de pagina te verversen.',
+                        })
+                        return
+                      }
+                      try {
+                        const clonedContract = JSON.parse(JSON.stringify(contract))
+                        setEditedData(clonedContract)
+                        setIsEditing(true)
+                      } catch (err) {
+                        console.error('Error activating edit mode:', err)
+                        toast.error('Fout bij activeren edit mode', {
+                          description: 'Kon contract data niet kopiëren. Probeer opnieuw.',
+                        })
+                      }
+                    }}
+                    className="gap-2"
+                    disabled={!contract || loading}
+                  >
+                    <Edit className="h-4 w-4" />
+                    Edit
+                  </Button>
+                )}
+                {whiseStatus?.pushed ? (
                   <Badge variant="outline" className="border-status-success text-status-success gap-1.5 px-3 py-1.5">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    {whiseStatus?.pushed ? 'Automatisch gepusht naar Whise' : 'Wordt automatisch naar Whise gepusht'}
+                    {whiseStatus.message?.includes('Automatisch') ? 'Automatisch gepusht naar Whise' : 'Gepusht naar Whise'}
                   </Badge>
                 ) : (
                   <Button

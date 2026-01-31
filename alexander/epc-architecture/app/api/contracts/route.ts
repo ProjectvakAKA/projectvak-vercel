@@ -47,6 +47,7 @@ function mapRowToContract(row: ContractRow) {
     manually_edited: jsonData.manually_edited ?? false,
     edited: jsonData.edited ?? null,
     summary: jsonData.summary ?? null,
+    whise_pushed: jsonData.whise_pushed ?? false,
   };
 }
 

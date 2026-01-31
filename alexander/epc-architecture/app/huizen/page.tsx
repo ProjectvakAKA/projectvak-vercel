@@ -353,12 +353,42 @@ export default function HuizenPage() {
             </Button>
           </div>
           <div className="flex flex-wrap justify-center gap-2 mt-1.5">
-            <Card className="bg-card border-border shrink-0 w-[10rem]"><CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-foreground leading-tight">{stats.total}</div><div className="text-sm text-muted-foreground leading-tight">Totaal</div></CardContent></Card>
-            <Card className="bg-card border-border shrink-0 w-[10rem]"><CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-green-600 leading-tight">{stats.pushed}</div><div className="text-sm text-muted-foreground leading-tight">Compleet</div></CardContent></Card>
-            <Card className="bg-card border-border shrink-0 w-[10rem]"><CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-yellow-600 leading-tight">{stats.needs_review}</div><div className="text-sm text-muted-foreground leading-tight">Review</div></CardContent></Card>
-            <Card className="bg-card border-border shrink-0 w-[10rem]"><CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-status-pending leading-tight">{stats.pending}</div><div className="text-sm text-muted-foreground leading-tight">Pending</div></CardContent></Card>
-            <Card className="bg-card border-border shrink-0 w-[10rem]"><CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-red-600 leading-tight">{stats.error}</div><div className="text-sm text-muted-foreground leading-tight">Errors</div></CardContent></Card>
-            <Card className="bg-card border-border shrink-0 w-[10rem]"><CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-blue-500 leading-tight">{stats.manually_edited}</div><div className="text-sm text-muted-foreground leading-tight">Manueel</div></CardContent></Card>
+            <Card
+              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'all' && 'ring-2 ring-primary')}
+              onClick={() => setStatusFilter('all')}
+            >
+              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-foreground leading-tight">{stats.total}</div><div className="text-sm text-muted-foreground leading-tight">Totaal</div></CardContent>
+            </Card>
+            <Card
+              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'pushed' && 'ring-2 ring-green-600')}
+              onClick={() => setStatusFilter('pushed')}
+            >
+              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-green-600 leading-tight">{stats.pushed}</div><div className="text-sm text-muted-foreground leading-tight">Compleet</div></CardContent>
+            </Card>
+            <Card
+              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'needs_review' && 'ring-2 ring-yellow-600')}
+              onClick={() => setStatusFilter('needs_review')}
+            >
+              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-yellow-600 leading-tight">{stats.needs_review}</div><div className="text-sm text-muted-foreground leading-tight">Review</div></CardContent>
+            </Card>
+            <Card
+              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'pending' && 'ring-2 ring-status-pending')}
+              onClick={() => setStatusFilter('pending')}
+            >
+              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-status-pending leading-tight">{stats.pending}</div><div className="text-sm text-muted-foreground leading-tight">Pending</div></CardContent>
+            </Card>
+            <Card
+              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'error' && 'ring-2 ring-red-600')}
+              onClick={() => setStatusFilter('error')}
+            >
+              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-red-600 leading-tight">{stats.error}</div><div className="text-sm text-muted-foreground leading-tight">Errors</div></CardContent>
+            </Card>
+            <Card
+              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'manually_edited' && 'ring-2 ring-blue-500')}
+              onClick={() => setStatusFilter('manually_edited')}
+            >
+              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-blue-500 leading-tight">{stats.manually_edited}</div><div className="text-sm text-muted-foreground leading-tight">Manueel</div></CardContent>
+            </Card>
           </div>
         </div>
       )}
