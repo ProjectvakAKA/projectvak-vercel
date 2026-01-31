@@ -1,5 +1,6 @@
 dropbox
 pdfplumber
+supabase
 PyMuPDF
 google-genai
 pdf2image

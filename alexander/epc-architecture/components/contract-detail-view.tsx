@@ -1,8 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -16,7 +14,6 @@ import {
   FileText,
   CheckCircle2,
   AlertCircle,
-  MapPin,
   Building2,
   Zap,
   Clock,
@@ -30,8 +27,6 @@ import {
   Edit,
   Save,
   X,
-  Droplets,
-  Fuel,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -209,9 +204,17 @@ function formatFieldValue(value: any): string {
   return String(value)
 }
 
-export default function ContractDetailPage() {
-  const params = useParams()
-  const router = useRouter()
+export type ContractDetailViewProps = {
+  filename: string
+  onBack: () => void
+  embedded?: boolean
+  /** Wordt aangeroepen na succesvolle (dummy of echte) push naar Whise, o.a. voor lijst "Reeds manueel naar Whise gepusht" */
+  onPushedToWhise?: (filename: string) => void
+  /** Wordt aangeroepen na opslaan van wijzigingen, zodat lijst en detail op niveau 3 dezelfde status tonen */
+  onContractUpdated?: (filename: string, payload: { manually_edited: boolean }) => void
+}
+
+export function ContractDetailView({ filename: filenameProp, onBack, embedded, onPushedToWhise, onContractUpdated }: ContractDetailViewProps) {
   const [contract, setContract] = useState<ContractData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -227,19 +230,11 @@ export default function ContractDetailPage() {
       setLoading(true)
       setError(null)
 
-      const filenameParam = params?.filename
-      if (!filenameParam) {
-        setError('Bestandsnaam ontbreekt in de URL')
+      const filename = filenameProp
+      if (!filename || filename === 'undefined') {
+        setError('Bestandsnaam ontbreekt')
         setLoading(false)
         return
-      }
-
-      const filename = typeof filenameParam === 'string'
-        ? decodeURIComponent(filenameParam)
-        : decodeURIComponent(String(filenameParam))
-
-      if (!filename || filename === 'undefined') {
-        throw new Error('Ongeldige bestandsnaam')
       }
 
       const response = await fetch(`/api/contracts/${encodeURIComponent(filename)}`)
@@ -268,13 +263,13 @@ export default function ContractDetailPage() {
   }
 
   useEffect(() => {
-    if (params && params.filename) {
+    if (filenameProp) {
       fetchContract()
     } else {
       setLoading(false)
-      setError('URL parameter ontbreekt')
+      setError('Bestandsnaam ontbreekt')
     }
-  }, [params])
+  }, [filenameProp])
 
   // Auto-refresh every 30 seconds, but pause if user is editing
   useEffect(() => {
@@ -294,7 +289,7 @@ export default function ContractDetailPage() {
     return () => {
       if (intervalId) clearInterval(intervalId)
     }
-  }, [isEditing, params])
+  }, [isEditing, filenameProp])
 
   // Check if contract was auto-pushed to Whise (check on load)
   useEffect(() => {
@@ -321,25 +316,9 @@ export default function ContractDetailPage() {
   const handlePushToWhise = async (autoPush = false) => {
     if (!contract) return
 
-    // Show info message that this feature is coming soon (bottom right, won't block)
-    toast.info('Whise Integratie', {
-      description: 'De Whise API integratie wordt momenteel ontwikkeld. Deze functionaliteit komt binnenkort beschikbaar!',
-      duration: 4000,
-    })
-    
-    // For now, don't make the API call
-    return
-
-    // TODO: Uncomment when Whise API is ready
-    /*
     try {
       setPushingToWhise(true)
-      const filenameParam = params?.filename
-      const filename = filenameParam
-        ? typeof filenameParam === 'string'
-          ? decodeURIComponent(filenameParam)
-          : decodeURIComponent(String(filenameParam))
-        : null
+      const filename = filenameProp
 
       if (!filename) {
         throw new Error('Filename not found')
@@ -357,17 +336,25 @@ export default function ContractDetailPage() {
         throw new Error(data.error || 'Failed to push to Whise')
       }
 
-      // Check if it was actually pushed or just ready
-      if (data.success && data.whiseId) {
+      // Success (echte push of dummy: API retourneert success/ready)
+      if (data.success) {
         setWhiseStatus({
           pushed: true,
-          message: autoPush ? 'Automatisch gepusht naar Whise' : 'Succesvol gepusht naar Whise'
+          message: data.whiseId
+            ? (autoPush ? 'Automatisch gepusht naar Whise' : 'Succesvol gepusht naar Whise')
+            : (data.message || 'Gepusht naar Whise')
         })
-        toast.success('Gepusht naar Whise', {
-          description: `Contract "${contract.filename}" is succesvol naar Whise gepusht.`,
-        })
+        onPushedToWhise?.(filename)
+        if (data.whiseId) {
+          toast.success('Gepusht naar Whise', {
+            description: `Contract "${contract.filename}" is succesvol naar Whise gepusht.`,
+          })
+        } else {
+          toast.success('Gepusht naar Whise', {
+            description: data.message || 'Contract is klaar voor Whise (API later effectief aan te sluiten).',
+          })
+        }
       } else if (data.note) {
-        // API not configured yet
         setWhiseStatus({
           pushed: false,
           message: 'Klaar voor push (Whise API nog niet geconfigureerd)'
@@ -380,6 +367,7 @@ export default function ContractDetailPage() {
           pushed: true,
           message: data.message || 'Gepusht naar Whise'
         })
+        onPushedToWhise?.(filename)
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
@@ -393,7 +381,6 @@ export default function ContractDetailPage() {
     } finally {
       setPushingToWhise(false)
     }
-    */
   }
 
   const handleSave = async () => {
@@ -405,13 +392,7 @@ export default function ContractDetailPage() {
     }
 
     try {
-      const filenameParam = params?.filename
-      const filename = filenameParam
-        ? typeof filenameParam === 'string'
-          ? decodeURIComponent(filenameParam)
-          : decodeURIComponent(String(filenameParam))
-        : null
-
+      const filename = filenameProp
       if (!filename || filename === 'undefined') {
         throw new Error('Bestandsnaam niet gevonden')
       }
@@ -442,7 +423,7 @@ export default function ContractDetailPage() {
       if (refreshResponse.ok) {
         const refreshedData = await refreshResponse.json()
         setContract(refreshedData)
-        // Status will automatically update to 'manually_edited' via getContractStatus
+        onContractUpdated?.(filename, { manually_edited: true })
       } else {
         // Fallback: update local state with manually_edited flag
         setContract({
@@ -453,6 +434,7 @@ export default function ContractDetailPage() {
             edited_by: 'user',
           },
         })
+        onContractUpdated?.(filename, { manually_edited: true })
       }
       
       setIsEditing(false)
@@ -487,13 +469,6 @@ export default function ContractDetailPage() {
   }
 
   if (error || !contract) {
-    const filenameParam = params?.filename
-    const displayFilename = filenameParam
-      ? typeof filenameParam === 'string'
-        ? decodeURIComponent(filenameParam)
-        : decodeURIComponent(String(filenameParam))
-      : null
-
     return (
       <div className="flex flex-col h-full">
         <div className="flex-1 overflow-auto flex items-center justify-center p-6">
@@ -501,12 +476,12 @@ export default function ContractDetailPage() {
             <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-6 mb-4">
               <h2 className="text-xl font-bold text-destructive mb-2">Error Loading Contract</h2>
               <p className="text-destructive mb-2">{error || 'Contract not found'}</p>
-              {displayFilename && (
-                <p className="text-sm text-muted-foreground mt-2">File: {displayFilename}</p>
+              {filenameProp && (
+                <p className="text-sm text-muted-foreground mt-2">File: {filenameProp}</p>
               )}
             </div>
-            <Button onClick={() => router.push('/contracts')} variant="outline">
-              Back to Overview
+            <Button onClick={onBack} variant="outline">
+              Terug
             </Button>
           </div>
         </div>
@@ -553,11 +528,11 @@ export default function ContractDetailPage() {
       <div className="border-b border-border bg-card/50 px-6 py-4">
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-4">
-            <Button variant="ghost" size="sm" asChild className="mt-1">
-              <Link href="/contracts">
+            {!embedded && (
+              <Button variant="ghost" size="sm" className="mt-1" onClick={onBack}>
                 <ArrowLeft className="h-4 w-4" />
-              </Link>
-            </Button>
+              </Button>
+            )}
             <div>
               <div className="flex items-center gap-3">
                 <div className="h-12 w-12 rounded-lg bg-gradient-to-br from-primary/20 to-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
@@ -643,21 +618,22 @@ export default function ContractDetailPage() {
                   <Edit className="h-4 w-4" />
                   Edit
                 </Button>
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={() => handlePushToWhise(false)}
-                  disabled={pushingToWhise || !contract}
-                  className="gap-2"
-                >
-                  <Upload className={cn("h-4 w-4", pushingToWhise && "animate-spin")} />
-                  {pushingToWhise ? 'Pushen...' : 'Push naar Whise'}
-                </Button>
-                {whiseStatus?.pushed && (
-                  <Badge variant="outline" className="border-status-success text-status-success">
-                    <CheckCircle2 className="h-3 w-3 mr-1" />
-                    Gepusht
+                {(confidenceScore >= 95 || whiseStatus?.pushed) ? (
+                  <Badge variant="outline" className="border-status-success text-status-success gap-1.5 px-3 py-1.5">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    {whiseStatus?.pushed ? 'Automatisch gepusht naar Whise' : 'Wordt automatisch naar Whise gepusht'}
                   </Badge>
+                ) : (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => handlePushToWhise(false)}
+                    disabled={pushingToWhise || !contract}
+                    className="gap-2"
+                  >
+                    <Upload className={cn("h-4 w-4", pushingToWhise && "animate-spin")} />
+                    {pushingToWhise ? 'Pushen...' : 'Push naar Whise'}
+                  </Button>
                 )}
               </>
             ) : (
@@ -921,91 +897,19 @@ export default function ContractDetailPage() {
 
           {/* Sidebar */}
           <div className="space-y-6">
-            {/* Contract Type Navigation */}
+            {!embedded && (
             <Card className="bg-card border-border">
               <CardHeader>
-                <CardTitle className="text-foreground text-sm font-medium">Document Types</CardTitle>
+                <CardTitle className="text-foreground text-sm font-medium">Navigatie</CardTitle>
               </CardHeader>
               <CardContent className="space-y-1">
-                <Link 
-                  href="/contracts"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md bg-primary/10 text-primary font-medium text-sm hover:bg-primary/15 transition-colors"
-                >
-                  <FileText className="h-4 w-4" />
-                  Huurcontracten
-                </Link>
-                <Link 
-                  href="/contracts/eigendomstitel"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <FileText className="h-4 w-4" />
-                  Eigendomstitel
-                </Link>
-                <Link 
-                  href="/contracts/epc"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <Zap className="h-4 w-4" />
-                  Energieprestatiecertificaat
-                </Link>
-                <Link 
-                  href="/contracts/elektrische"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <Zap className="h-4 w-4" />
-                  Elektrische
-                </Link>
-                <Link 
-                  href="/contracts/bodemattest"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <FileText className="h-4 w-4" />
-                  Bodemattest
-                </Link>
-                <Link 
-                  href="/contracts/asbestattest"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <Shield className="h-4 w-4" />
-                  Asbestattest
-                </Link>
-                <Link 
-                  href="/contracts/stedenbouwkundig"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <MapPin className="h-4 w-4" />
-                  Stedenbouwkundig
-                </Link>
-                <Link 
-                  href="/contracts/kadastraal"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <MapPin className="h-4 w-4" />
-                  Kadastraal
-                </Link>
-                <Link 
-                  href="/contracts/post-interventiedossier"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <FileText className="h-4 w-4" />
-                  Post-interventiedossier
-                </Link>
-                <Link 
-                  href="/contracts/watertoets"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <Droplets className="h-4 w-4" />
-                  Watertoets
-                </Link>
-                <Link 
-                  href="/contracts/stookolietankattest"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground text-sm transition-colors"
-                >
-                  <Fuel className="h-4 w-4" />
-                  Stookolietankattest
-                </Link>
+                <Button variant="outline" size="sm" className="w-full justify-start gap-2" onClick={onBack}>
+                  <ArrowLeft className="h-4 w-4" />
+                  Terug naar Huizen
+                </Button>
               </CardContent>
             </Card>
+            )}
             {/* Contract Summary */}
             <Card className="bg-card border-border">
               <CardHeader>
@@ -1038,7 +942,7 @@ export default function ContractDetailPage() {
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Rent</span>
                       <span className="text-foreground font-semibold">
-                        €{(() => {
+                        €{((): string => {
                           const v = contractData.financieel!.huurprijs
                           const n = typeof v === 'number' ? v : Number(v)
                           return Number.isFinite(n) ? n.toFixed(2) : String(v ?? '')
@@ -1071,7 +975,11 @@ export default function ContractDetailPage() {
                 <div className="mt-4 pt-4 border-t border-border">
                   <div className="flex items-center justify-between text-sm mb-2">
                     <span className="text-muted-foreground">Whise Status</span>
-                    {whiseStatus?.pushed ? (
+                    {(contract as any)?.manually_edited || (contract as any)?.edited ? (
+                      <Badge variant="outline" className="border-blue-500 text-blue-600">
+                        Manueel
+                      </Badge>
+                    ) : whiseStatus?.pushed ? (
                       <Badge className="bg-status-success text-white">
                         <CheckCircle2 className="h-3 w-3 mr-1" />
                         Gepusht
@@ -1086,10 +994,13 @@ export default function ContractDetailPage() {
                       </Badge>
                     )}
                   </div>
-                  {whiseStatus?.message && (
+                  {(contract as any)?.manually_edited && whiseStatus?.pushed && (
+                    <p className="text-xs text-muted-foreground mt-1">Reeds manueel naar Whise gepusht</p>
+                  )}
+                  {whiseStatus?.message && !((contract as any)?.manually_edited && whiseStatus?.pushed) && (
                     <p className="text-xs text-muted-foreground mt-1">{whiseStatus.message}</p>
                   )}
-                  {confidenceScore >= 95 && !whiseStatus?.pushed && (
+                  {confidenceScore >= 95 && !whiseStatus?.pushed && !(contract as any)?.manually_edited && (
                     <p className="text-xs text-muted-foreground mt-1">
                       Wordt automatisch gepusht bij confidence &gt;= 95%
                     </p>

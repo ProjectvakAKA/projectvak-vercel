@@ -69,10 +69,14 @@ APP_SECRET_SOURCE_RO = os.getenv('APP_SECRET_SOURCE_RO')
 REFRESH_TOKEN_SOURCE_RO = os.getenv('REFRESH_TOKEN_SOURCE_RO')
 GEMINI_API_KEY_ANALYZE = os.getenv('GEMINI_API_KEY_ANALYZE')
 
-# TARGET (JSON storage)
+# TARGET Dropbox (alleen nog voor CSV-log; JSON gaat naar Supabase)
 APP_KEY_TARGET = os.getenv('APP_KEY_TARGET')
 APP_SECRET_TARGET = os.getenv('APP_SECRET_TARGET')
 REFRESH_TOKEN_TARGET = os.getenv('REFRESH_TOKEN_TARGET')
+
+# Supabase (JSON contract storage, vervangt Dropbox TARGET voor bestanden)
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY')
 
 # EMAIL
 SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
@@ -560,7 +564,7 @@ class FolderManager:
             print(f"⚠️  Cache save failed: {e}")
 
     def scan_organized_folders(self) -> List[Dict[str, str]]:
-        """Scan only organized folders for AI context"""
+        """Scan alleen niveau-1 mappen (één map per adres) voor AI-context."""
         existing = []
 
         try:
@@ -570,7 +574,8 @@ class FolderManager:
             except dropbox.exceptions.ApiError:
                 return []
 
-            result = self.dbx.files_list_folder(ORGANIZED_FOLDER_PREFIX, recursive=True)
+            # Alleen directe kinderen = niveau-1 mappen (adres-mappen)
+            result = self.dbx.files_list_folder(ORGANIZED_FOLDER_PREFIX, recursive=False)
 
             while True:
                 for entry in result.entries:
@@ -582,7 +587,7 @@ class FolderManager:
                             folder_contents = self.dbx.files_list_folder(path)
                             file_count = sum(1 for e in folder_contents.entries
                                            if isinstance(e, dropbox.files.FileMetadata))
-                        except:
+                        except Exception:
                             file_count = 0
 
                         existing.append({
@@ -608,6 +613,32 @@ class FolderManager:
 
         self.save_cache()
         return existing
+
+    @staticmethod
+    def sanitize_suggested_filename(suggested: str, fallback: str) -> str:
+        """Make AI-suggested filename safe: basename only, safe chars, .pdf extension."""
+        if not suggested or not isinstance(suggested, str):
+            return fallback
+        # Alleen bestandsnaam (geen pad)
+        name = suggested.strip().replace("\\", "/").split("/")[-1]
+        # Verwijder onveilige tekens, spaties → underscore
+        name = re.sub(r'[^\w\s\-.]', '', name)
+        name = re.sub(r'\s+', '_', name)
+        name = re.sub(r'_+', '_', name).strip('_.')
+        if not name:
+            return fallback
+        if not name.lower().endswith('.pdf'):
+            name = name + '.pdf'
+        return name[:200]  # redelijke max lengte
+
+    @staticmethod
+    def fallback_filename_from_folder(folder_path: str, original_name: str) -> str:
+        """Als AI geen geldige suggested_filename gaf: Adres_document.pdf (niveau 1 = adres-map)."""
+        # Laatste map uit path = adres (bv. Kerkstraat_10, Onbekend_adres)
+        parts = [p for p in folder_path.strip().replace("\\", "/").split("/") if p]
+        adres_part = parts[-1] if parts else "Onbekend_adres"
+        adres_part = re.sub(r'[^\w\-]', '_', adres_part).strip('_') or "Onbekend_adres"
+        return f"{adres_part}_document.pdf"
 
     def sanitize_folder_path(self, path: str) -> str:
         """Make folder path safe"""
@@ -928,13 +959,26 @@ def init_clients():
             dbx_organize.files_create_folder_v2(ORGANIZED_FOLDER_PREFIX)
             logger.info(f"📁 Created {ORGANIZED_FOLDER_PREFIX}")
 
-        # Ensure CSV exists
+        # Ensure CSV exists (Dropbox TARGET blijft voor CSV)
         ensure_csv_exists(dbx_target)
+
+        # Supabase client voor JSON contract storage (vervangt Dropbox TARGET voor bestanden)
+        supabase_client = None
+        if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+            try:
+                from supabase import create_client
+                supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+                logger.info("✅ Supabase: JSON contract storage")
+            except Exception as e:
+                logger.warning(f"⚠️ Supabase client init failed: {e}")
+        else:
+            logger.warning("⚠️ SUPABASE_URL/SUPABASE_SERVICE_KEY niet gezet → JSON gaat nog naar Dropbox TARGET")
 
         return {
             'dbx_organize': dbx_organize,
             'dbx_analyze': dbx_analyze,
             'dbx_target': dbx_target,
+            'supabase': supabase_client,
             'gemini_organize': client_organize,
             'gemini_analyze': client_analyze,
             'model_organize': model_organize,
@@ -1100,116 +1144,86 @@ def smart_classify(text: str, filename: str, current_location: str,
     extraction_method = pdf_metadata.get('extraction_method', 'text')
     method_note = " (OCR used)" if extraction_method == "ocr" else ""
 
-    prompt = f"""SYSTEM: Je bent een EXPERT documentclassificeerder die ZEER SPECIFIEK onderscheid maakt tussen documentsoorten.
+    prompt = f"""SYSTEM: Je bent een EXPERT documentclassificeerder. NIVEAU 1 = één map per ADRES. Alle documenten voor hetzelfde adres gaan in dezelfde map.
 
-CRITICAL: Je moet 100% ZEKER zijn van de classificatie. Bij twijfel → maak NIEUWE folder.
+CRITICAL: folder_path is ALTIJD /Adres (bv. /Kerkstraat_10, /Eikelstraat_22). Geen submappen op type. Als het adres uit het document al als map bestaat in EXISTING FOLDERS → action "existing" en die folder_path. Anders → action "new" en folder_path = /Adres (nieuwe map aanmaken).
 
 FILENAME: {filename}
 LOCATION: {current_location}
 EXTRACTION: {pdf_metadata.get('pages_scanned', '?')}/{pdf_metadata.get('total_pages', '?')} pages{method_note}
 
-EXISTING FOLDERS:
-{existing_folders if existing_folders else "First document - no folders yet."}
+EXISTING FOLDERS (niveau 1 = adres-mappen; nieuwe doc voor zelfde adres → zelfde map):
+{existing_folders if existing_folders else "Geen mappen nog - eerste document."}
 
 DOCUMENT TEXT:
 {text_sample}
 
 ═══════════════════════════════════════════════════════════════════
-STRIKTE CLASSIFICATIE REGELS - LEES DIT HEEL AANDACHTIG
+REGELS - NIVEAU 1 = ADRES
 ═══════════════════════════════════════════════════════════════════
 
-1. TAAL IDENTIFICATIE (HOOGSTE PRIORITEIT):
-   - Frans document → NOOIT in Nederlandse folders
-   - Nederlands document → NOOIT in Franse folders  
-   - Engels document → Aparte Engelse folder
-   - Check eerste 20 woorden voor taal detectie
-   - Taal is 100% bepalend, zelfs bij gelijkaardig onderwerp
+1. ADRES BEPALEN:
+   - Haal straat + nummer uit de tekst (bv. Kerkstraat 10 → folder_path /Kerkstraat_10). Spaties/tekens → underscore in mapnaam.
+   - Als geen adres of onzeker → folder_path /Onbekend_adres.
 
-2. HUURCONTRACT vs ANDERE CONTRACTEN (KRITIEK):
+2. ZELFDE ADRES = ZELFDE MAP:
+   - Als EXISTING FOLDERS al een map heeft voor dat adres (bv. /Kerkstraat_10) → action "existing", folder_path "/Kerkstraat_10". Het nieuwe document wordt in die bestaande map gestoken.
+   - Als dat adres nog geen map heeft → action "new", folder_path "/Kerkstraat_10" (map wordt aangemaakt).
+   - Huurcontract Kerkstraat 10 en EPC Kerkstraat 10 → BEIDE in /Kerkstraat_10 (verschillende bestandsnamen: Kerkstraat_10_huurcontract.pdf, Kerkstraat_10_EPC.pdf).
 
-   Een document is ALLEEN huurcontract als ALLE volgende aanwezig zijn:
-   ✓ Woorden: "huur", "verhuur", "huurprijs", "huurder", "verhuurder"
-   ✓ Maandelijkse betalingen vermeld
-   ✓ Adres van TE HUREN pand
-   ✓ Ingangsdatum huurperiode
-   ✓ Huurwaarborg of waarborg
+3. DOCUMENTTYPE (voor suggested_filename alleen):
+   - Bepaal type: huurcontract, EPC, eigendomstitel, factuur, enz. Gebruik kleine letters in bestandsnaam.
+   - suggested_filename = Adres_Type.pdf (bv. Kerkstraat_10_huurcontract.pdf, Kerkstraat_10_EPC.pdf).
 
-   Als ÉÉN van bovenstaande ontbreekt → GEEN huurcontract!
+4. VOORBEELDEN:
 
-   Veelvoorkomende NIET-huurcontracten:
-   - EPC certificaat → /Documenten/EPC (heeft adres MAAR geen huurprijs!)
-   - Verzekering → /Contracten/Verzekeringen (heeft maandprijs MAAR geen huur)
-   - Arbeidscontract → /Contracten/Werk (heeft salaris MAAR geen pand)
-   - Koop/verkoop → /Contracten/Verkoop (heeft pand MAAR geen huur)
-   - Energie contract → /Contracten/Energie (heeft adres MAAR geen verhuurder)
+   ✓ Document over Kerkstraat 10, bestaande map /Kerkstraat_10 in EXISTING FOLDERS:
+     → action "existing", folder_path "/Kerkstraat_10", suggested_filename "Kerkstraat_10_huurcontract.pdf" (of EPC, eigendomstitel, etc.)
 
-3. ONDERSCHEID BINNEN DOCUMENTEN:
+   ✓ Document over Eikelstraat 22, geen map Eikelstraat_22 nog:
+     → action "new", folder_path "/Eikelstraat_22", suggested_filename "Eikelstraat_22_EPC.pdf"
 
-   Factuur vs Contract:
-   - Factuur = éénmalige betaling, factuurnummer, vervaldatum
-   - Contract = doorlopende overeenkomst, looptijd, partijen
-
-   Certificaat vs Contract:
-   - Certificaat = attest, goedkeuring, geen betalingen
-   - Contract = afspraken, verplichtingen, betalingen
-
-4. VAKGEBIED HERKENNING (voor studie/werk documenten):
-
-   - Frans lesmateriaal → /Studies/Frans (NIET /Studies/Economie ook al gaat het OVER economie)
-   - Wiskunde in Engels → /Studies/Mathematics (taal bepaalt!)
-   - Bedrijfskunde presentatie → /Studies/Bedrijfskunde
-   - Geschiedenis samenvatting → /Studies/Geschiedenis
-
-   Test: Als je de tekst NIET kan lezen zonder die taal te kennen → classificeer op TAAL
-
-5. SPECIFICITEIT VEREISTEN:
-
-   - Confidence moet 95+ zijn voor bestaande folder
-   - Bij twijfel tussen 2 folders → maak NIEUWE specifiekere folder
-   - Beter te specifiek dan te algemeen
-   - Geef altijd EXACTE reden waarom je voor deze folder koos
-
-6. VOORBEELD CLASSIFICATIES:
-
-   ✓ CORRECT:
-   "Ce document contient des informations sur..." → /Documenten/Frans
-   "EPC certificaat voor Kerkstraat 10" → /Documenten/EPC  
-   "Huurcontract Kerkstraat 10, huurprijs €1200/maand" → /Huurcontracten
-   "Polis BA verzekering" → /Contracten/Verzekeringen
-
-   ✗ FOUT:
-   "Cours d'économie" → /Studies/Economie (MOET /Studies/Frans zijn!)
-   "EPC Kerkstraat 10" → /Huurcontracten (GEEN huurprijs = GEEN huur!)
-   "Electriciteitscontract Kerkstraat 10" → /Huurcontracten (Energie contract!)
+   ✓ Geen adres in tekst:
+     → action "new" of "existing", folder_path "/Onbekend_adres", suggested_filename "Onbekend_adres_document.pdf"
 
 ═══════════════════════════════════════════════════════════════════
+
+VERPLICHT HERNOMEN: Je geeft ALTIJD "suggested_filename" in dit formaat: Adres_Type.pdf
+- Adres = straat + nummer uit de tekst (bv. Kerkstraat_10), spaties/tekens → underscore.
+- Type = wat voor document (bv. huurcontract, EPC, eigendomstitel, factuur). Gebruik kleine letters, geen spaties.
+- Als het ADRES niet in de tekst staat of je bent niet zeker: gebruik "Onbekend_adres".
+- Als het TYPE niet duidelijk is: gebruik "document" in suggested_filename.
+Voorbeelden: Kerkstraat_10_huurcontract.pdf, Onbekend_adres_EPC.pdf, Kerkstraat_10_document.pdf, Eikelstraat_22_eigendomstitel.pdf.
+Alleen letters, cijfers, underscores; eindig op .pdf.
 
 ANTWOORD FORMAT (ALLEEN JSON, geen tekst ervoor/erna):
 
-Voor BESTAANDE folder (alleen als 95%+ zeker):
+Bestaande adres-map (document voor Kerkstraat 10, map /Kerkstraat_10 bestaat al):
 {{
   "action": "existing",
-  "folder_path": "/Huurcontracten",
+  "folder_path": "/Kerkstraat_10",
   "confidence": 98,
-  "reasoning": "Nederlands huurcontract: bevat huurprijs (€1200), verhuurder (Jan Peeters), huurder naam, adres Kerkstraat 10, ingangsdatum, waarborg",
-  "description": "Huurcontracten"
+  "reasoning": "Document over Kerkstraat 10; map /Kerkstraat_10 bestaat al, dus hierin plaatsen",
+  "description": "Kerkstraat 10",
+  "suggested_filename": "Kerkstraat_10_huurcontract.pdf"
 }}
 
-Voor NIEUWE folder (bij twijfel of nieuwe categorie):
+Nieuwe adres-map (document over Eikelstraat 22, die map bestaat nog niet):
 {{
   "action": "new", 
-  "folder_path": "/Documenten/EPC",
+  "folder_path": "/Eikelstraat_22",
   "confidence": 100,
-  "reasoning": "EPC energiecertificaat: bevat energielabel, geen huurprijs, geen verhuurder, wel adres maar dit is certificaat geen contract",
-  "description": "EPC energiecertificaten"
+  "reasoning": "Document over Eikelstraat 22; map bestaat nog niet, aanmaken",
+  "description": "Eikelstraat 22",
+  "suggested_filename": "Eikelstraat_22_EPC.pdf"
 }}
 
+Adres onbekend: folder_path "/Onbekend_adres", suggested_filename "Onbekend_adres_huurcontract.pdf"
+
 CRITICAL CHECKS voor jouw antwoord:
-☐ Heb ik de TAAL correct geïdentificeerd?
-☐ Heb ik ALLE vereiste velden voor huurcontract gecontroleerd?
-☐ Is confidence 95+ of heb ik nieuwe folder gemaakt?
-☐ Klopt mijn reasoning met de feiten in de tekst?
-☐ Kan dit document in GEEN andere folder passen?
+☐ Heb ik het ADRES uit de tekst gehaald (straat + nummer)?
+☐ Staat dat adres al in EXISTING FOLDERS? → action "existing" + die folder_path. Anders → action "new".
+☐ Heb ik suggested_filename gegeven (Adres_Type.pdf)? Bij onzeker adres: Onbekend_adres.
 
 JSON:"""
 
@@ -1389,9 +1403,17 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                     if not folder_mgr.create_folder(folder_path, description):
                         continue
 
-                # Move document
+                # Bestandsnaam: altijd hernoemen naar Adres_Type.pdf (AI-suggestie of fallback)
+                suggested = result.get('suggested_filename')
+                dest_name = FolderManager.sanitize_suggested_filename(suggested, "") if suggested else ""
+                if not dest_name:
+                    dest_name = FolderManager.fallback_filename_from_folder(folder_path, pdf_info['name'])
+                if dest_name != pdf_info['name']:
+                    print(f"   📝 Hernoemen: {pdf_info['name']} → {dest_name}")
+
+                # Move document (eventueel met nieuwe naam)
                 full_folder_path = folder_mgr.sanitize_folder_path(folder_path)
-                new_path = f"{full_folder_path}/{pdf_info['name']}"
+                new_path = f"{full_folder_path}/{dest_name}"
 
                 print(f"\n📤 Moving...")
                 try:
@@ -2197,16 +2219,36 @@ def process_rental_contract(clients, pdf_info):
         if "raw_data" in result and "error" not in result['raw_data']:
             json_data["raw_data"] = result['raw_data']
 
-        json_file = f"/data_{base}_{ts}.json"
+        json_name = f"data_{base}_{ts}.json"
+        json_file = f"/{json_name}"
+        supabase_client = clients.get('supabase')
 
-        print(f"💾 Saving JSON to TARGET...")
-        dbx_target.files_upload(
-            json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
-            json_file,
-            mode=dropbox.files.WriteMode.overwrite
-        )
-
-        print(f"✅ JSON saved: {json_file}")
+        # JSON opslaan: Supabase (vervangt Dropbox TARGET) of fallback Dropbox
+        if supabase_client:
+            print(f"💾 Saving JSON to Supabase...")
+            try:
+                supabase_client.table('contracts').upsert(
+                    {'name': json_name, 'data': json_data},
+                    on_conflict='name'
+                ).execute()
+                print(f"✅ JSON saved to Supabase: {json_name}")
+            except Exception as e:
+                logger.error(f"Supabase upsert failed: {e}")
+                print(f"❌ Supabase save failed, fallback to Dropbox...")
+                dbx_target.files_upload(
+                    json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
+                    json_file,
+                    mode=dropbox.files.WriteMode.overwrite
+                )
+                print(f"✅ JSON saved to Dropbox: {json_file}")
+        else:
+            print(f"💾 Saving JSON to Dropbox TARGET...")
+            dbx_target.files_upload(
+                json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
+                json_file,
+                mode=dropbox.files.WriteMode.overwrite
+            )
+            print(f"✅ JSON saved: {json_file}")
 
         # Auto-push to Whise if confidence >= 95%
         conf = confidence  # Define conf variable for consistency
@@ -2265,13 +2307,19 @@ def process_rental_contract(clients, pdf_info):
                         json_data['whise_pushed'] = True
                         json_data['whise_id'] = whise_result.get('id')
                         json_data['whise_pushed_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        
-                        # Re-upload JSON with Whise metadata
-                        dbx_target.files_upload(
-                            json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
-                            json_file,
-                            mode=dropbox.files.WriteMode.overwrite
-                        )
+
+                        # Update JSON with Whise metadata (Supabase of Dropbox)
+                        if supabase_client:
+                            try:
+                                supabase_client.table('contracts').update({'data': json_data}).eq('name', json_name).execute()
+                            except Exception as e:
+                                logger.warning(f"Supabase update after Whise push failed: {e}")
+                        else:
+                            dbx_target.files_upload(
+                                json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
+                                json_file,
+                                mode=dropbox.files.WriteMode.overwrite
+                            )
                     else:
                         error_text = response.text
                         logger.warning(f"⚠️  Whise API returned error: {response.status_code} - {error_text}")
@@ -2287,8 +2335,8 @@ def process_rental_contract(clients, pdf_info):
                 logger.warning(f"Failed to auto-push to Whise: {e}")
                 print(f"⚠️  Auto-push naar Whise mislukt: {e}")
 
-        # Log to CSV
-        log_to_csv(dbx_target, pdf_info['name'], result, json_file, "success")
+        # Log to CSV (Dropbox TARGET blijft voor CSV)
+        log_to_csv(dbx_target, pdf_info['name'], result, json_name, "success")
 
         # Send email - alleen als verwerking succesvol was
         conf = result['confidence']
