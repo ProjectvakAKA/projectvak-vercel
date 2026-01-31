@@ -333,7 +333,7 @@ export default function HuizenPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       {/* Boven: stats alleen op niveau 1 en 2 — op niveau 3 verborgen voor meer ruimte aan velden */}
       {level !== 3 && (
         <div className="border-b border-border bg-card/50 px-3 py-1.5 shrink-0">
@@ -393,8 +393,12 @@ export default function HuizenPage() {
         </div>
       )}
 
-      {/* Content: niveau 1, 2 of 3 — niv1 full-width (contracts-stijl), niv2+ squeeze + vloeiende overgang */}
-      <div ref={contentRef} className="flex-1 flex min-h-0 overflow-hidden">
+      {/* Content: niveau 1, 2 of 3 — op mobiel overflow-y-auto zodat lijst scrollt; op desktop overflow-hidden + ScrollArea */}
+      <div
+        ref={contentRef}
+        className="flex-1 flex min-h-0 overflow-y-auto overflow-x-hidden md:overflow-hidden"
+        style={{ WebkitOverflowScrolling: 'touch' }}
+      >
         {(level === 1 || level === 2) && (
           <>
             {/* Niveau 2 ingeklapt: alleen smalle strip met knop om uit te klappen */}
