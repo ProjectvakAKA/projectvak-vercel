@@ -108,7 +108,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setMobileOpen(false)} aria-hidden />
         )}
 
-        {/* Main: op mobiel overflow-auto + touch scroll (iOS) */}
+        {/* Main: op mobiel overflow-auto + touch scroll (iOS); op desktop overflow-hidden */}
         <main
           className="flex-1 min-h-0 min-w-0 overflow-auto md:overflow-hidden pt-10 md:pt-0"
           style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}

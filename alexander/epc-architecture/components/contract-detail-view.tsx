@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { usePathname } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -215,6 +216,7 @@ export type ContractDetailViewProps = {
 }
 
 export function ContractDetailView({ filename: filenameProp, onBack, embedded, onPushedToWhise, onContractUpdated }: ContractDetailViewProps) {
+  const pathname = usePathname()
   const [contract, setContract] = useState<ContractData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -271,25 +273,25 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
     }
   }, [filenameProp])
 
-  // Auto-refresh every 30 seconds, but pause if user is editing
+  // Auto-refresh every 30 seconds, but pause if user is editing. Geen refresh op login/account-aanvragen.
   useEffect(() => {
+    if (pathname === '/login' || pathname?.startsWith('/login/')) return
     if (isEditing) return // Don't auto-refresh while editing
-    
+
     let intervalId: NodeJS.Timeout | null = null
-    
+
     intervalId = setInterval(() => {
-      // Don't refresh if user is editing or typing
-      if (!isEditing && 
-          document.activeElement?.tagName !== 'INPUT' && 
+      if (!isEditing &&
+          document.activeElement?.tagName !== 'INPUT' &&
           document.activeElement?.tagName !== 'TEXTAREA') {
         fetchContract()
       }
-    }, 30000) // 30 seconds
-    
+    }, 30000)
+
     return () => {
       if (intervalId) clearInterval(intervalId)
     }
-  }, [isEditing, filenameProp])
+  }, [isEditing, filenameProp, pathname])
 
   // Check if contract was pushed to Whise (auto or manual) (check on load)
   useEffect(() => {

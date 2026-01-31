@@ -9,3 +9,4 @@ alwaysApply: true
 - **Nooit** bestanden buiten `alexander/` aanpassen tenzij de gebruiker dit **expliciet** vraagt (teamcode blijft onaangeroerd).
 - Nieuwe bestanden voor dit project: aanmaken onder **`alexander/`** (bijv. `alexander/scripts/`, `alexander/epc-architecture/`).
 - Bij pushen naar GitHub: ervoor zorgen dat de **`alexander/`** map up-to-date is (bijv. root → alexander/ kopiëren en dan alexander/ committen en pushen), niet de root overschrijven met teamcode.
+- **Nooit pushen naar `origin`** (Arthur-Code-123/HIRBProjectvak = teamrepo). Alleen pushen naar **`vercel`** (ProjectvakAKA/projectvak-vercel). Gebruik: `git push vercel main`.

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -127,6 +128,7 @@ function houseMatchesStatusFilter(contracts: ContractFile[], filter: StatusFilte
 }
 
 export default function HuizenPage() {
+  const pathname = usePathname()
   const [contracts, setContracts] = useState<ContractFile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -269,8 +271,9 @@ export default function HuizenPage() {
     return () => window.removeEventListener('huizen-reset-level1', goToLevel1)
   }, [])
 
-  // Auto-refresh elke 30 seconden (zoals op contracts page)
+  // Auto-refresh elke 30 seconden (zoals op contracts page). Geen refresh op login/account-aanvragen.
   useEffect(() => {
+    if (pathname === '/login' || pathname?.startsWith('/login/')) return
     let intervalId: ReturnType<typeof setInterval> | null = null
     if (!loading && !error) {
       intervalId = setInterval(() => {
@@ -280,7 +283,7 @@ export default function HuizenPage() {
       }, 30000)
     }
     return () => { if (intervalId) clearInterval(intervalId) }
-  }, [loading, error])
+  }, [loading, error, pathname])
 
   const huisMap = useMemo(() => groupContractsByHuis(contracts), [contracts])
   const huizenList = useMemo(() => Array.from(huisMap.entries()).map(([key, list]) => ({ key, label: list[0]?.pand_adres || key, contracts: list })), [huisMap])
@@ -393,7 +396,7 @@ export default function HuizenPage() {
         </div>
       )}
 
-      {/* Content: op mobiel block-flow (geen flex, lijst zichtbaar); op desktop flex */}
+      {/* Content: op mobiel block-flow (geen flex, lijst kan niet inkrimpen); op desktop flex */}
       <div
         ref={contentRef}
         className="block md:flex md:flex-col md:flex-1 md:min-h-0 md:overflow-hidden md:overflow-x-hidden"
@@ -499,8 +502,9 @@ export default function HuizenPage() {
                   <p className="text-xs text-muted-foreground mt-1 md:hidden">Scroll naar beneden voor de lijst met panden.</p>
                 </div>
               )}
+              {/* Op mobiel: block met min-h, geen flex (lijst altijd zichtbaar); op desktop: scroll-container */}
               <div
-                className="block min-h-[60vh] md:min-h-0 md:flex-1 md:overflow-y-auto md:overflow-x-hidden"
+                className="block min-h-[60vh] md:min-h-0 md:flex-1 md:overflow-y-auto md:overflow-x-hidden md:overscroll-contain"
                 style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
               >
                 <div className={cn('space-y-1', level === 1 ? 'p-6' : 'p-2')}>
