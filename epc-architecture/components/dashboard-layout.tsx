@@ -108,8 +108,8 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setMobileOpen(false)} aria-hidden />
         )}
 
-        {/* Main content: op mobiel ruimte voor vaste header; overflow-hidden + min-h-0 zodat inner scroll (bv. huizen) werkt */}
-        <main className="flex-1 min-h-0 min-w-0 overflow-hidden pt-10 md:pt-0">{children}</main>
+        {/* Main: op mobiel overflow-auto zodat hele pagina scrollt (huizenlijst zichtbaar); op desktop overflow-hidden voor inner scroll */}
+        <main className="flex-1 min-h-0 min-w-0 overflow-auto md:overflow-hidden pt-10 md:pt-0">{children}</main>
       </div>
     </SidebarContext.Provider>
   )

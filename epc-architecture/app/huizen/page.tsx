@@ -333,7 +333,7 @@ export default function HuizenPage() {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col min-h-full md:h-full md:min-h-0">
       {/* Boven: stats alleen op niveau 1 en 2 — op niveau 3 verborgen voor meer ruimte aan velden */}
       {level !== 3 && (
         <div className="border-b border-border bg-card/50 px-3 py-1.5 shrink-0">
@@ -393,11 +393,10 @@ export default function HuizenPage() {
         </div>
       )}
 
-      {/* Content: op mobiel min-h zodat lijst zichtbaar; overflow-y-auto voor scroll */}
+      {/* Content: op mobiel kolom + flow (main scrollt); op desktop rij + flex-1 + overflow-hidden */}
       <div
         ref={contentRef}
-        className="flex-1 flex min-h-[40vh] md:min-h-0 overflow-y-auto overflow-x-hidden md:overflow-hidden"
-        style={{ WebkitOverflowScrolling: 'touch' }}
+        className="flex flex-col overflow-visible md:flex md:flex-1 md:min-h-0 md:overflow-hidden md:overflow-x-hidden"
       >
         {(level === 1 || level === 2) && (
           <>
@@ -419,7 +418,7 @@ export default function HuizenPage() {
             <div
               className={cn(
                 'flex flex-col min-h-0 transition-[width] duration-300 ease-out',
-                level === 1 ? 'border-0 flex-1 min-w-0 w-full' : 'shrink-0 border-r border-border min-w-[120px]'
+                level === 1 ? 'border-0 min-w-0 w-full md:flex-1' : 'shrink-0 border-r border-border min-w-[120px]'
               )}
               style={level === 1 ? undefined : { width: `${panelWidths.left}%` }}
             >
@@ -499,10 +498,10 @@ export default function HuizenPage() {
                   </p>
                 </div>
               )}
-              {/* Native scroll container: min-h op mobiel zodat lijst altijd zichtbaar is */}
+              {/* Op mobiel: lijst in flow (geen scroll-container); op desktop: scroll-container */}
               <div
-                className="flex-1 min-h-[50vh] md:min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
-                style={{ WebkitOverflowScrolling: 'touch' }}
+                className="overflow-visible md:flex-1 md:min-h-0 md:overflow-y-auto md:overflow-x-hidden md:overscroll-contain"
+                style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
               >
                 <div className={cn('space-y-1', level === 1 ? 'p-6' : 'p-2')}>
                   {loading ? (
