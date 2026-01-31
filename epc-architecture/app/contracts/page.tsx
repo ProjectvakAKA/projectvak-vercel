@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -34,6 +35,7 @@ function getContractStatus(contract: ContractFile): DocumentStatus {
 }
 
 export default function ContractsPage() {
+  const pathname = usePathname()
   const [contracts, setContracts] = useState<ContractFile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -69,46 +71,29 @@ export default function ContractsPage() {
     fetchContracts()
   }, [])
 
-  // Auto-refresh every 30 seconds, but pause if user is interacting
+  // Auto-refresh every 30 seconds, but pause if user is interacting. Geen refresh op login/account-aanvragen.
   useEffect(() => {
+    if (pathname === '/login' || pathname?.startsWith('/login/')) return
     let intervalId: NodeJS.Timeout | null = null
     let timeoutId: NodeJS.Timeout | null = null
-    
+
     const setupAutoRefresh = () => {
-      // Clear any existing interval
       if (intervalId) clearInterval(intervalId)
-      
-      // Only auto-refresh if not loading and no error
       if (!loading && !error) {
         intervalId = setInterval(() => {
-          // Don't refresh if user is actively typing in search/filters
-          if (document.activeElement?.tagName === 'INPUT' || 
+          if (document.activeElement?.tagName === 'INPUT' ||
               document.activeElement?.tagName === 'TEXTAREA' ||
-              document.activeElement?.tagName === 'SELECT') {
-            // User is typing, skip this refresh
-            return
-          }
-          
+              document.activeElement?.tagName === 'SELECT') return
           fetchContracts()
-        }, 30000) // 30 seconds
+        }, 30000)
       }
     }
-    
-    // Initial setup
     setupAutoRefresh()
-    
-    // Reset interval when loading/error state changes
-    const handleStateChange = () => {
-      if (timeoutId) clearTimeout(timeoutId)
-      timeoutId = setTimeout(setupAutoRefresh, 1000)
-    }
-    
-    // Cleanup
     return () => {
       if (intervalId) clearInterval(intervalId)
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [loading, error])
+  }, [loading, error, pathname])
 
   const filteredContracts = contracts.filter((contract) => {
     // Basic search

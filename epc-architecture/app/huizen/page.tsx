@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -127,6 +128,7 @@ function houseMatchesStatusFilter(contracts: ContractFile[], filter: StatusFilte
 }
 
 export default function HuizenPage() {
+  const pathname = usePathname()
   const [contracts, setContracts] = useState<ContractFile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -269,8 +271,9 @@ export default function HuizenPage() {
     return () => window.removeEventListener('huizen-reset-level1', goToLevel1)
   }, [])
 
-  // Auto-refresh elke 30 seconden (zoals op contracts page)
+  // Auto-refresh elke 30 seconden (zoals op contracts page). Geen refresh op login/account-aanvragen.
   useEffect(() => {
+    if (pathname === '/login' || pathname?.startsWith('/login/')) return
     let intervalId: ReturnType<typeof setInterval> | null = null
     if (!loading && !error) {
       intervalId = setInterval(() => {
@@ -280,7 +283,7 @@ export default function HuizenPage() {
       }, 30000)
     }
     return () => { if (intervalId) clearInterval(intervalId) }
-  }, [loading, error])
+  }, [loading, error, pathname])
 
   const huisMap = useMemo(() => groupContractsByHuis(contracts), [contracts])
   const huizenList = useMemo(() => Array.from(huisMap.entries()).map(([key, list]) => ({ key, label: list[0]?.pand_adres || key, contracts: list })), [huisMap])

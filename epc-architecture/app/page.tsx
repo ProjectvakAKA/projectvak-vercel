@@ -1,9 +1,12 @@
 'use client'
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { FileText, TrendingUp, CheckCircle, AlertCircle, Clock, ArrowRight, Database, Building2, User } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { FileText, TrendingUp, CheckCircle, AlertCircle, Clock, ArrowRight, Database, Building2, User, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { supabaseBrowser } from '@/lib/supabase-browser';
+import { cn } from '@/lib/utils';
 
 interface Stats {
   total: number;
@@ -13,6 +16,22 @@ interface Stats {
 }
 
 export default function HomePage() {
+  const router = useRouter();
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (accountRef.current && !accountRef.current.contains(e.target as Node)) {
+        setAccountOpen(false);
+      }
+    }
+    if (accountOpen) {
+      document.addEventListener('click', handleClickOutside);
+    }
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [accountOpen]);
+
   const [stats, setStats] = useState<Stats>({
     total: 0,
     highConfidence: 0,
@@ -89,12 +108,43 @@ export default function HomePage() {
                 </p>
               </div>
             </div>
-            <Link href="/login" className="shrink-0">
-              <Button variant="outline" size="sm" className="gap-2 text-foreground border-border hover:bg-accent">
+            <div className="relative shrink-0" ref={accountRef}>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  'gap-2 text-foreground border-border hover:bg-accent',
+                  accountOpen && 'bg-accent'
+                )}
+                onClick={() => setAccountOpen((o) => !o)}
+                aria-expanded={accountOpen}
+                aria-haspopup="true"
+              >
                 <User className="h-4 w-4" />
                 Account
               </Button>
-            </Link>
+              {accountOpen && (
+                <div
+                  className="absolute right-0 top-full z-50 mt-1 min-w-[10rem] rounded-md border border-border bg-popover py-1 shadow-md"
+                  role="menu"
+                >
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent"
+                    role="menuitem"
+                    onClick={async () => {
+                      await supabaseBrowser.auth.signOut();
+                      setAccountOpen(false);
+                      router.push('/login');
+                      router.refresh();
+                    }}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    Uitloggen
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

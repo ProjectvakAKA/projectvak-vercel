@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -211,6 +211,7 @@ function formatFieldValue(value: any): string {
 
 export default function ContractDetailPage() {
   const params = useParams()
+  const pathname = usePathname()
   const router = useRouter()
   const [contract, setContract] = useState<ContractData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -276,25 +277,25 @@ export default function ContractDetailPage() {
     }
   }, [params])
 
-  // Auto-refresh every 30 seconds, but pause if user is editing
+  // Auto-refresh every 30 seconds, but pause if user is editing. Geen refresh op login/account-aanvragen.
   useEffect(() => {
+    if (pathname === '/login' || pathname?.startsWith('/login/')) return
     if (isEditing) return // Don't auto-refresh while editing
-    
+
     let intervalId: NodeJS.Timeout | null = null
-    
+
     intervalId = setInterval(() => {
-      // Don't refresh if user is editing or typing
-      if (!isEditing && 
-          document.activeElement?.tagName !== 'INPUT' && 
+      if (!isEditing &&
+          document.activeElement?.tagName !== 'INPUT' &&
           document.activeElement?.tagName !== 'TEXTAREA') {
         fetchContract()
       }
-    }, 30000) // 30 seconds
-    
+    }, 30000)
+
     return () => {
       if (intervalId) clearInterval(intervalId)
     }
-  }, [isEditing, params])
+  }, [isEditing, params, pathname])
 
   // Check if contract was pushed to Whise (auto or manual) (check on load)
   useEffect(() => {
