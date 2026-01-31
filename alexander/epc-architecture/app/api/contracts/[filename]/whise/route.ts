@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { logger } from '../../../../lib/logger';
-import { validateFilename } from '../../../../lib/validation';
+import { logger } from '@/lib/logger';
+import { validateFilename } from '@/lib/validation';
 
 /**
  * POST /api/contracts/[filename]/whise

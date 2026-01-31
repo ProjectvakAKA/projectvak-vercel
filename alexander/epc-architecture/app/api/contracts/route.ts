@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
-import { logger } from '../../../lib/logger';
+import { logger } from '@/lib/logger';
 import { getSupabaseContracts } from '../../../lib/supabase-server';
 
 type ContractRow = { name: string; data: Record<string, unknown>; updated_at?: string };
