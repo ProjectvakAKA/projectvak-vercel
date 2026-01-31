@@ -12,8 +12,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  // Explicitly set the project root to avoid conflicts with parent directory (Next.js 16+)
-  outputFileTracingRoot: path.join(__dirname),
+  // Explicitly set the project root to avoid conflicts with parent directory
+  experimental: {
+    outputFileTracingRoot: path.join(__dirname),
+  },
 }
 
 export default nextConfig

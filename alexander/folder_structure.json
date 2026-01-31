@@ -94,5 +94,17 @@
     "created": "2026-01-25T21:12:55.912006",
     "description": "Auto-detected",
     "file_count": 0
+  },
+  "/Georganiseerd/Lijsterlaan_88": {
+    "name": "Lijsterlaan_88",
+    "created": "2026-01-31T16:02:00.050361",
+    "description": "Lijsterlaan 88",
+    "file_count": 2
+  },
+  "/Georganiseerd/Contracten/Huurcontracten/Beukenhof_14B": {
+    "name": "Beukenhof_14B",
+    "created": "2026-01-31T16:24:53.311267",
+    "description": "Beukenhof 14B",
+    "file_count": 1
   }
 }

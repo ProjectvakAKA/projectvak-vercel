@@ -781,8 +781,10 @@ export default function HuizenPage() {
                                 <div className="min-w-0 flex-1">
                                   <div className="font-medium text-foreground truncate">{doc.pand_adres || doc.name}</div>
                                   <div className="text-xs text-muted-foreground truncate">{doc.name}</div>
-                                  {isManual && isPushedToWhise && (
-                                    <div className="text-xs text-muted-foreground mt-1">Reeds manueel naar Whise gepusht</div>
+                                  {isPushedToWhise && (
+                                    <div className="text-xs text-muted-foreground mt-1">
+                                      Reeds {(doc as any)?.whise_push_manual === true ? 'handmatig' : 'automatisch'} naar Whise gepusht
+                                    </div>
                                   )}
                                 </div>
                                 <div className="flex items-center gap-4 shrink-0 text-right">

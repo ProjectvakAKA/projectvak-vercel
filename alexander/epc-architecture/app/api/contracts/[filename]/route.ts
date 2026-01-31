@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
-import { logger } from '@/lib/logger';
-import { validateFilename } from '@/lib/validation';
-import { getSupabaseContracts } from '@/lib/supabase-server';
+import { logger } from '../../../../lib/logger';
+import { validateFilename } from '../../../../lib/validation';
+import { getSupabaseContracts } from '../../../../lib/supabase-server';
 
 type ContractRow = { name: string; data: Record<string, unknown> };
 

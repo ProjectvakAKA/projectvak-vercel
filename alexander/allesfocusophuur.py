@@ -29,8 +29,12 @@ from pdf2image import convert_from_bytes
 from PIL import Image
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load .env from script dir en project root, zodat Supabase altijd geladen is (niet afhankelijk van cwd)
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_env_loaded = load_dotenv(os.path.join(_script_dir, '.env'))
+if not _env_loaded and _script_dir != os.path.abspath('.'):
+    load_dotenv(os.path.join(os.path.dirname(_script_dir), '.env'))
+load_dotenv()  # cwd als fallback
 
 # ============================================================================
 # LOGGING SETUP
@@ -813,6 +817,55 @@ def send_email(subject, body):
 
 
 # ============================================================================
+# SUPABASE REST API (geen pip-pakket i.v.m. lokale map supabase/)
+# ============================================================================
+
+def _supabase_headers(supabase_config):
+    url, key = supabase_config.get('url'), supabase_config.get('key')
+    if not url or not key:
+        raise RuntimeError("Supabase config ontbreekt (url/key).")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+
+
+def supabase_upsert_contract(supabase_config, json_name, json_data):
+    """Upsert één contract in Supabase via REST API."""
+    import requests
+    url = supabase_config["url"]
+    r = requests.post(
+        f"{url}/rest/v1/contracts",
+        headers=_supabase_headers(supabase_config),
+        json={"name": json_name, "data": json_data},
+        timeout=30,
+    )
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Supabase upsert failed: {r.status_code} {r.text[:200]}")
+    return r
+
+
+def supabase_update_contract_data(supabase_config, json_name, json_data):
+    """Update alleen het veld data van een contract."""
+    import requests
+    from urllib.parse import quote
+    url = supabase_config["url"]
+    # PostgREST: string met . moet tussen dubbele aanhalingstekens, dan URL-encoden
+    value = quote(f'"{json_name}"', safe="")
+    r = requests.patch(
+        f"{url}/rest/v1/contracts?name=eq.{value}",
+        headers={k: v for k, v in _supabase_headers(supabase_config).items() if k != "Prefer"},
+        json={"data": json_data},
+        timeout=30,
+    )
+    if r.status_code not in (200, 204):
+        raise RuntimeError(f"Supabase update failed: {r.status_code} {r.text[:200]}")
+    return r
+
+
+# ============================================================================
 # CSV LOGGING
 # ============================================================================
 
@@ -962,23 +1015,30 @@ def init_clients():
         # Ensure CSV exists (Dropbox TARGET blijft voor CSV)
         ensure_csv_exists(dbx_target)
 
-        # Supabase client voor JSON contract storage (vervangt Dropbox TARGET voor bestanden)
-        supabase_client = None
-        if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-            try:
-                from supabase import create_client
-                supabase_client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-                logger.info("✅ Supabase: JSON contract storage")
-            except Exception as e:
-                logger.warning(f"⚠️ Supabase client init failed: {e}")
-        else:
-            logger.warning("⚠️ SUPABASE_URL/SUPABASE_SERVICE_KEY niet gezet → JSON gaat nog naar Dropbox TARGET")
+        # Supabase via REST API (geen pip-pakket: lokale map supabase/ zou die overschaduwen)
+        _url = (os.getenv('SUPABASE_URL') or SUPABASE_URL or '').strip().rstrip('/')
+        _key = (os.getenv('SUPABASE_SERVICE_KEY') or SUPABASE_SERVICE_KEY or '').strip()
+        if not _url or not _key:
+            raise RuntimeError("SUPABASE_URL of SUPABASE_SERVICE_KEY ontbreekt in .env. Zet ze (Supabase Dashboard → Settings → API) en draai opnieuw.")
+        try:
+            import requests
+        except ImportError:
+            raise RuntimeError("'requests' is nodig voor Supabase. Installeer met: pip install requests")
+        # Snelle check: GET op REST endpoint
+        r = requests.get(
+            f"{_url}/rest/v1/contracts?limit=1",
+            headers={"apikey": _key, "Authorization": f"Bearer {_key}", "Content-Type": "application/json"},
+            timeout=10,
+        )
+        if r.status_code not in (200, 206):
+            raise RuntimeError(f"Supabase bereikbaar maar fout: {r.status_code}. Controleer SUPABASE_URL en SUPABASE_SERVICE_KEY.")
+        logger.info("✅ Supabase: JSON contract storage actief (REST API)")
 
         return {
             'dbx_organize': dbx_organize,
             'dbx_analyze': dbx_analyze,
             'dbx_target': dbx_target,
-            'supabase': supabase_client,
+            'supabase': {'url': _url, 'key': _key},
             'gemini_organize': client_organize,
             'gemini_analyze': client_analyze,
             'model_organize': model_organize,
@@ -1390,6 +1450,17 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                 confidence = result['confidence']
                 reasoning = result['reasoning']
 
+                # Bestemming bestandsnaam bepalen (nodig voor huurcontract-map)
+                suggested = result.get('suggested_filename')
+                dest_name = FolderManager.sanitize_suggested_filename(suggested, "") if suggested else ""
+                if not dest_name:
+                    dest_name = FolderManager.fallback_filename_from_folder(folder_path, pdf_info['name'])
+
+                # Hernoemde huurcontracten altijd in Contracten/Huurcontracten
+                if dest_name and "huurcontract" in dest_name.lower():
+                    if "Contracten" not in folder_path or "Huurcontracten" not in folder_path:
+                        folder_path = "/Contracten/Huurcontracten" + (folder_path if folder_path.startswith("/") else "/" + folder_path)
+
                 print(f"\n📊 AI DECISION:")
                 print(f"   Action: {action.upper()}")
                 print(f"   Folder: {folder_path}")
@@ -1404,10 +1475,6 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                         continue
 
                 # Bestandsnaam: altijd hernoemen naar Adres_Type.pdf (AI-suggestie of fallback)
-                suggested = result.get('suggested_filename')
-                dest_name = FolderManager.sanitize_suggested_filename(suggested, "") if suggested else ""
-                if not dest_name:
-                    dest_name = FolderManager.fallback_filename_from_folder(folder_path, pdf_info['name'])
                 if dest_name != pdf_info['name']:
                     print(f"   📝 Hernoemen: {pdf_info['name']} → {dest_name}")
 
@@ -2221,34 +2288,17 @@ def process_rental_contract(clients, pdf_info):
 
         json_name = f"data_{base}_{ts}.json"
         json_file = f"/{json_name}"
-        supabase_client = clients.get('supabase')
+        supabase_config = clients.get('supabase')
 
-        # JSON opslaan: Supabase (vervangt Dropbox TARGET) of fallback Dropbox
-        if supabase_client:
-            print(f"💾 Saving JSON to Supabase...")
-            try:
-                supabase_client.table('contracts').upsert(
-                    {'name': json_name, 'data': json_data},
-                    on_conflict='name'
-                ).execute()
-                print(f"✅ JSON saved to Supabase: {json_name}")
-            except Exception as e:
-                logger.error(f"Supabase upsert failed: {e}")
-                print(f"❌ Supabase save failed, fallback to Dropbox...")
-                dbx_target.files_upload(
-                    json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
-                    json_file,
-                    mode=dropbox.files.WriteMode.overwrite
-                )
-                print(f"✅ JSON saved to Dropbox: {json_file}")
-        else:
-            print(f"💾 Saving JSON to Dropbox TARGET...")
-            dbx_target.files_upload(
-                json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
-                json_file,
-                mode=dropbox.files.WriteMode.overwrite
-            )
-            print(f"✅ JSON saved: {json_file}")
+        # JSON opslaan: alleen Supabase (via REST API)
+        print(f"💾 Saving JSON to Supabase...")
+        try:
+            supabase_upsert_contract(supabase_config, json_name, json_data)
+            print(f"✅ JSON saved to Supabase: {json_name}")
+        except Exception as e:
+            logger.error(f"Supabase upsert failed: {e}")
+            print(f"❌ Supabase save failed — JSON niet opgeslagen")
+            raise
 
         # Auto-push to Whise if confidence >= 95%
         conf = confidence  # Define conf variable for consistency
@@ -2308,18 +2358,11 @@ def process_rental_contract(clients, pdf_info):
                         json_data['whise_id'] = whise_result.get('id')
                         json_data['whise_pushed_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-                        # Update JSON with Whise metadata (Supabase of Dropbox)
-                        if supabase_client:
-                            try:
-                                supabase_client.table('contracts').update({'data': json_data}).eq('name', json_name).execute()
-                            except Exception as e:
-                                logger.warning(f"Supabase update after Whise push failed: {e}")
-                        else:
-                            dbx_target.files_upload(
-                                json.dumps(json_data, indent=2, ensure_ascii=False).encode('utf-8'),
-                                json_file,
-                                mode=dropbox.files.WriteMode.overwrite
-                            )
+                        # Update JSON with Whise metadata (alleen Supabase)
+                        try:
+                            supabase_update_contract_data(supabase_config, json_name, json_data)
+                        except Exception as e:
+                            logger.warning(f"Supabase update after Whise push failed: {e}")
                     else:
                         error_text = response.text
                         logger.warning(f"⚠️  Whise API returned error: {response.status_code} - {error_text}")

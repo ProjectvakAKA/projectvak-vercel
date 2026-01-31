@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
-import { logger } from '@/lib/logger';
+import { logger } from '../../../lib/logger';
 import { getSupabaseContracts } from '../../../lib/supabase-server';
 
 type ContractRow = { name: string; data: Record<string, unknown>; updated_at?: string };
@@ -48,6 +48,7 @@ function mapRowToContract(row: ContractRow) {
     edited: jsonData.edited ?? null,
     summary: jsonData.summary ?? null,
     whise_pushed: jsonData.whise_pushed ?? false,
+    whise_push_manual: jsonData.whise_push_manual ?? false,
   };
 }
 

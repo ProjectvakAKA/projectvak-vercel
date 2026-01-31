@@ -244,15 +244,10 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
         throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
       }
 
-      const text = await response.text()
-      let data: any
-      try {
-        data = text.startsWith('{') || text.startsWith('[') ? JSON.parse(text) : null
-      } catch {
-        data = null
-      }
-      if (!data || data.error) {
-        throw new Error(data?.error || 'Ongeldig antwoord van de server')
+      const data = await response.json()
+
+      if (data.error) {
+        throw new Error(data.error)
       }
 
       // Only update contract if not currently editing (to prevent losing edits)
@@ -296,16 +291,17 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
     }
   }, [isEditing, filenameProp])
 
-  // Check if contract was auto-pushed to Whise (check on load)
+  // Check if contract was pushed to Whise (auto or manual) (check on load)
   useEffect(() => {
     if (contract) {
       const confidence = contract.confidence?.score || 0
-      const wasAutoPushed = (contract as any).whise_pushed === true
-      
-      if (wasAutoPushed) {
+      const wasPushed = (contract as any).whise_pushed === true
+      const wasManualPush = (contract as any).whise_push_manual === true
+
+      if (wasPushed) {
         setWhiseStatus({
           pushed: true,
-          message: 'Automatisch gepusht naar Whise (confidence >= 95%)'
+          message: wasManualPush ? 'Handmatig gepusht naar Whise' : 'Automatisch gepusht naar Whise (confidence >= 95%)'
         })
       } else if (confidence >= 95) {
         // Contract has high confidence but wasn't pushed yet
@@ -321,14 +317,12 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
   const handlePushToWhise = async (autoPush = false) => {
     if (!contract) return
 
-    setPushingToWhise(true)
-    const filename = filenameProp
     try {
+      setPushingToWhise(true)
+      const filename = filenameProp
+
       if (!filename) {
-        setWhiseStatus({ pushed: true, message: 'Gepusht naar Whise' })
-        onPushedToWhise?.(filename)
-        toast.success('Gepusht naar Whise')
-        return
+        throw new Error('Filename not found')
       }
 
       const response = await fetch(`/api/contracts/${encodeURIComponent(filename)}/whise`, {
@@ -336,27 +330,55 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ manual: !autoPush }),
       })
-      const text = await response.text()
-      let data: any = { success: true }
-      try {
-        if (text.startsWith('{') || text.startsWith('[')) data = JSON.parse(text)
-      } catch {
-        /* blijf success: true */
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to push to Whise')
       }
 
-      // Altijd "gepusht" tonen in UI (ook bij HTML/404 van server) – geen fouten tonen
+      // Success (echte push of dummy: API retourneert success/ready)
+      if (data.success) {
+        setWhiseStatus({
+          pushed: true,
+          message: data.whiseId
+            ? (autoPush ? 'Automatisch gepusht naar Whise' : 'Handmatig gepusht naar Whise')
+            : (data.message || 'Gepusht naar Whise')
+        })
+        onPushedToWhise?.(filename)
+        if (data.whiseId) {
+          toast.success('Gepusht naar Whise', {
+            description: `Contract "${contract.filename}" is succesvol naar Whise gepusht.`,
+          })
+        } else {
+          toast.success('Gepusht naar Whise', {
+            description: data.message || 'Contract is klaar voor Whise (API later effectief aan te sluiten).',
+          })
+        }
+      } else if (data.note) {
+        setWhiseStatus({
+          pushed: false,
+          message: 'Klaar voor push (Whise API nog niet geconfigureerd)'
+        })
+        toast.info('Whise API niet geconfigureerd', {
+          description: 'Configureer WHISE_API_ENDPOINT en WHISE_API_TOKEN om te pushen.',
+        })
+      } else {
+        setWhiseStatus({
+          pushed: true,
+          message: data.message || 'Gepusht naar Whise'
+        })
+        onPushedToWhise?.(filename)
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
       setWhiseStatus({
-        pushed: true,
-        message: data.whiseId
-          ? (autoPush ? 'Automatisch gepusht naar Whise' : 'Succesvol gepusht naar Whise')
-          : (data.message || 'Gepusht naar Whise')
+        pushed: false,
+        message: `Fout: ${errorMessage}`
       })
-      onPushedToWhise?.(filename)
-      toast.success('Gepusht naar Whise', { description: 'Opgeslagen in deze sessie.' })
-    } catch {
-      setWhiseStatus({ pushed: true, message: 'Gepusht naar Whise' })
-      onPushedToWhise?.(filename)
-      toast.success('Gepusht naar Whise', { description: 'Opgeslagen in deze sessie.' })
+      toast.error('Fout bij pushen', {
+        description: errorMessage,
+      })
     } finally {
       setPushingToWhise(false)
     }
@@ -551,8 +573,13 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
           </div>
           <div className="flex items-center gap-2">
             {!isEditing ? (
-              <>
-                {!whiseStatus?.pushed && (
+              (confidenceScore >= 95 || whiseStatus?.pushed) ? (
+                <Badge variant="outline" className="border-status-success text-status-success gap-1.5 px-3 py-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {(contract as any)?.whise_push_manual === true ? 'Handmatig gepusht naar Whise' : (confidenceScore >= 95 ? 'Automatisch gepusht naar Whise' : 'Gepusht naar Whise')}
+                </Badge>
+              ) : (
+                <>
                   <Button
                     variant="outline"
                     size="sm"
@@ -580,13 +607,6 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
                     <Edit className="h-4 w-4" />
                     Edit
                   </Button>
-                )}
-                {whiseStatus?.pushed ? (
-                  <Badge variant="outline" className="border-status-success text-status-success gap-1.5 px-3 py-1.5">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    {whiseStatus.message?.includes('Automatisch') ? 'Automatisch gepusht naar Whise' : 'Gepusht naar Whise'}
-                  </Badge>
-                ) : (
                   <Button
                     variant="default"
                     size="sm"
@@ -597,8 +617,8 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
                     <Upload className={cn("h-4 w-4", pushingToWhise && "animate-spin")} />
                     {pushingToWhise ? 'Pushen...' : 'Push naar Whise'}
                   </Button>
-                )}
-              </>
+                </>
+              )
             ) : (
               <>
                 <Button
@@ -958,7 +978,7 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
                     )}
                   </div>
                   {(contract as any)?.manually_edited && whiseStatus?.pushed && (
-                    <p className="text-xs text-muted-foreground mt-1">Reeds manueel naar Whise gepusht</p>
+                    <p className="text-xs text-muted-foreground mt-1">Reeds {(contract as any)?.whise_push_manual === true ? 'handmatig' : 'automatisch'} naar Whise gepusht</p>
                   )}
                   {whiseStatus?.message && !((contract as any)?.manually_edited && whiseStatus?.pushed) && (
                     <p className="text-xs text-muted-foreground mt-1">{whiseStatus.message}</p>
