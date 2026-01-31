@@ -44,13 +44,21 @@ export async function POST(
 
     const contractData = await contractResponse.json();
 
-    // Check if contract is approved (confidence >= 95)
-    const confidence = contractData.confidence?.score || 0;
-    if (confidence < 95) {
+    const confidence = contractData.confidence?.score ?? contractData.confidence ?? 0;
+    let isManualPush = false;
+    try {
+      const body = await request.json().catch(() => ({}));
+      isManualPush = body?.manual === true;
+    } catch {
+      // no body or invalid JSON
+    }
+
+    // Alleen bij automatische push: confidence >= 95 vereist; bij manuele push mag elke score
+    if (!isManualPush && confidence < 95) {
       return NextResponse.json(
-        { 
-          error: 'Contract must have confidence >= 95% to push to Whise',
-          confidence 
+        {
+          error: 'Contract must have confidence >= 95% to push to Whise (or use manual push)',
+          confidence,
         },
         { status: 400 }
       );

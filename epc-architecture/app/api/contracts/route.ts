@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
 import { logger } from '@/lib/logger';
+import { getSupabaseContracts } from '@/lib/supabase-server';
 
-// Initialize Dropbox client for TARGET (JSON storage)
+// Initialize Dropbox client for TARGET (alleen nog voor fallback of CSV; JSON in Supabase)
 async function getDropboxClient() {
   const APP_KEY_TARGET = process.env.APP_KEY_TARGET;
   const APP_SECRET_TARGET = process.env.APP_SECRET_TARGET;
@@ -12,107 +13,113 @@ async function getDropboxClient() {
     throw new Error('Dropbox TARGET credentials not configured');
   }
 
-  // Next.js server routes need explicit fetch
   const dbx = new Dropbox({
     clientId: APP_KEY_TARGET,
     clientSecret: APP_SECRET_TARGET,
     refreshToken: REFRESH_TOKEN_TARGET,
-    fetch: fetch, // Explicitly provide fetch for Next.js server routes
+    fetch: fetch,
   });
 
   return dbx;
 }
 
-// GET /api/contracts - List all JSON files in Dropbox TARGET
+function mapRowToContract(row: { name: string; data: any; updated_at?: string }) {
+  const jsonData = row.data || {};
+  const contractData = jsonData.contract_data || {};
+  const pand = contractData.pand || {};
+  const partijen = contractData.partijen || {};
+  const verhuurder = partijen.verhuurder || {};
+  const financieel = contractData.financieel || {};
+  const modified = row.updated_at || jsonData.processed;
+  return {
+    name: row.name,
+    path: row.name,
+    size: null,
+    modified,
+    pand_adres: pand.adres ?? null,
+    pand_type: pand.type ?? null,
+    verhuurder_naam: verhuurder.naam ?? null,
+    huurprijs: financieel.huurprijs ?? null,
+    confidence: jsonData.confidence?.score ?? null,
+    processed: jsonData.processed ?? modified,
+    manually_edited: jsonData.manually_edited ?? false,
+    edited: jsonData.edited ?? null,
+    summary: jsonData.summary ?? null,
+  };
+}
+
+// GET /api/contracts - List contracts from Supabase (or Dropbox TARGET fallback)
 export async function GET() {
   try {
-    const dbx = await getDropboxClient();
+    const supabase = getSupabaseContracts();
 
-    // List all files in root (or specific folder)
+    if (supabase) {
+      const { data: rows, error } = await supabase.from('contracts').select('name, data, updated_at').order('updated_at', { ascending: false });
+      if (error) {
+        logger.error('Supabase contracts list error', { error: error.message });
+        throw new Error(error.message);
+      }
+      const contractsWithData = (rows || []).map(mapRowToContract);
+      logger.info('Contracts loaded from Supabase', { count: contractsWithData.length });
+      return NextResponse.json({
+        contracts: contractsWithData,
+        totalFiles: contractsWithData.length,
+        jsonFilesCount: contractsWithData.length,
+      });
+    }
+
+    // Fallback: Dropbox TARGET
+    const dbx = await getDropboxClient();
     const result = await dbx.filesListFolder({ path: '' });
 
-    logger.debug('Files found in Dropbox', { 
-      totalFiles: result.result.entries.length 
-    });
-
-    // Filter for JSON files that start with "data_"
     const jsonFileEntries = result.result.entries
-      .filter((entry: any) => 
-        entry['.tag'] === 'file' && 
+      .filter((entry: any) =>
+        entry['.tag'] === 'file' &&
         entry.name.endsWith('.json') &&
         entry.name.startsWith('data_')
       );
 
-    logger.info('JSON contract files found', { 
-      count: jsonFileEntries.length 
-    });
-
-    // Fetch JSON content for each file to extract pand adres
     const contractsWithData = await Promise.all(
       jsonFileEntries.map(async (entry: any) => {
         try {
-          // Download the JSON file
-          // Use path_lower (preferred) or path_display for consistency
           const downloadPath = entry.path_lower || entry.path_display;
           const downloadResult = await dbx.filesDownload({ path: downloadPath });
           const resultData = downloadResult.result as any;
-          
-          // Try different ways to get the file content (fileBlob is most common in Dropbox SDK)
           let text: string;
-          
           if (resultData.fileBlob) {
-            // If it's a Blob, convert to text (most common case)
             const arrayBuffer = await resultData.fileBlob.arrayBuffer();
             text = Buffer.from(arrayBuffer).toString('utf-8');
           } else if (resultData.fileBinary) {
-            // Try fileBinary as Uint8Array
             text = Buffer.from(resultData.fileBinary).toString('utf-8');
           } else if (resultData.fileContents) {
-            // Try fileContents as string or buffer
             const fileContents = resultData.fileContents;
             text = typeof fileContents === 'string' ? fileContents : Buffer.from(fileContents).toString('utf-8');
           } else {
-            logger.error('No file content found', { 
-              filename: entry.name, 
-              availableKeys: Object.keys(resultData) 
-            });
-            throw new Error(`File content is empty or in unexpected format for ${entry.name}`);
+            throw new Error(`File content empty for ${entry.name}`);
           }
-          
-          if (!text || text.length === 0) {
-            throw new Error(`File content is empty for ${entry.name}`);
-          }
-          
           const jsonData = JSON.parse(text);
-
-          // Extract important fields
           const contractData = jsonData.contract_data || {};
           const pand = contractData.pand || {};
           const partijen = contractData.partijen || {};
           const verhuurder = partijen.verhuurder || {};
           const financieel = contractData.financieel || {};
-
           return {
             name: entry.name,
             path: entry.path_display,
             size: entry.size,
             modified: entry.server_modified,
-            // Extract data from JSON
             pand_adres: pand.adres || null,
             pand_type: pand.type || null,
             verhuurder_naam: verhuurder.naam || null,
             huurprijs: financieel.huurprijs || null,
             confidence: jsonData.confidence?.score || null,
             processed: jsonData.processed || entry.server_modified,
-            // Include manually_edited flag for status detection
             manually_edited: jsonData.manually_edited || false,
             edited: jsonData.edited || null,
-            // Include summary
             summary: jsonData.summary || null,
           };
-          } catch (error: unknown) {
-            logger.error(`Error loading contract file`, error, { filename: entry.name });
-          // Return basic info if JSON can't be loaded
+        } catch (err: unknown) {
+          logger.error('Error loading contract file', err, { filename: entry.name });
           return {
             name: entry.name,
             path: entry.path_display,
@@ -132,23 +139,22 @@ export async function GET() {
       })
     );
 
-    // Sort by modified date (newest first)
-    contractsWithData.sort((a: any, b: any) => 
+    contractsWithData.sort((a: any, b: any) =>
       new Date(b.modified).getTime() - new Date(a.modified).getTime()
     );
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       contracts: contractsWithData,
       totalFiles: result.result.entries.length,
-      jsonFilesCount: contractsWithData.length
+      jsonFilesCount: contractsWithData.length,
     });
   } catch (error: unknown) {
     logger.error('Error fetching contracts list', error);
     return NextResponse.json(
-      { 
-        error: error.message || 'Failed to fetch contracts',
-        details: error.toString(),
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      {
+        error: error instanceof Error ? error.message : 'Failed to fetch contracts',
+        details: String(error),
+        stack: process.env.NODE_ENV === 'development' && error instanceof Error ? error.stack : undefined,
       },
       { status: 500 }
     );

@@ -42,7 +42,8 @@
   --status-success: oklch(0.7 0.17 145);
   --status-warning: oklch(0.8 0.16 85);
   --status-error: oklch(0.55 0.2 25);
-  --status-pending: oklch(0.6 0.12 260);
+  /* Pending = oranje/amber (niet blauw, anders verwarring met Manueel) */
+  --status-pending: oklch(0.72 0.16 55);
 }
 
 .dark {
@@ -132,4 +133,49 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Huizen: vloeiende overgang niv1→niv2 (categorieën schuiven in van rechts) */
+@keyframes huizen-level-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.huizen-level-in {
+  animation: huizen-level-in 0.35s ease-out forwards;
+}
+
+/* niv2→niv3: exact dezelfde slide als niv1→niv2 (16px, 0.35s) — geen squeeze mogelijk want linkerkolom wisselt van inhoud */
+@keyframes huizen-level3-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.huizen-level3-in {
+  animation: huizen-level3-in 0.35s ease-out forwards;
+}
+
+/* niv3→niv2: categorieën schuiven terug van links */
+@keyframes huizen-level-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.huizen-level-back {
+  animation: huizen-level-back 0.35s ease-out forwards;
 }

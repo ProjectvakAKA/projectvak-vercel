@@ -452,10 +452,14 @@ export default function ContractsPage() {
                                   Verhuurder: N/A
                                 </span>
                               )}
-                              {contract.huurprijs ? (
+                              {contract.huurprijs != null && contract.huurprijs !== '' ? (
                                 <span className="flex items-center gap-1">
                                   <Euro className="h-3 w-3" />
-                                  €{contract.huurprijs.toFixed(2)}/maand
+                                  €{(() => {
+                                    const v = contract.huurprijs
+                                    const n = typeof v === 'number' ? v : Number(v)
+                                    return Number.isFinite(n) ? n.toFixed(2) : String(v ?? '')
+                                  })()}/maand
                                 </span>
                               ) : (
                                 <span className="flex items-center gap-1 text-muted-foreground/50">

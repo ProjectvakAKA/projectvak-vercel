@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { FileText, TrendingUp, CheckCircle, AlertCircle, Clock, ArrowRight, Database } from 'lucide-react';
+import { FileText, TrendingUp, CheckCircle, AlertCircle, Clock, ArrowRight, Database, Building2 } from 'lucide-react';
 
 interface Stats {
   total: number;
@@ -172,6 +172,29 @@ export default function HomePage() {
             </div>
           </Link>
 
+          <Link
+            href="/huizen"
+            className="bg-white rounded-lg shadow-sm p-8 border border-gray-200 hover:shadow-md transition group"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                  Huizen per pand
+                </h2>
+                <p className="text-gray-600 mb-4">
+                  Overzicht per pand en de 10 documentcategorieën. Elk contract dat klaar is (1/10 is genoeg) wordt direct naar Whise gepusht — zonder te wachten op de rest.
+                </p>
+                <div className="flex items-center text-blue-600 font-medium group-hover:gap-3 transition-all gap-2">
+                  <span>Ga naar huizen</span>
+                  <ArrowRight className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="p-4 bg-green-100 rounded-lg">
+                <Building2 className="w-8 h-8 text-green-600" />
+              </div>
+            </div>
+          </Link>
+
           <div className="bg-white rounded-lg shadow-sm p-8 border border-gray-200">
             <div className="flex items-center justify-between">
               <div>
@@ -196,7 +219,7 @@ export default function HomePage() {
         {/* Info Section */}
         <div className="bg-white rounded-lg shadow-sm p-8 border border-gray-200">
           <h2 className="text-2xl font-bold text-gray-900 mb-4">Hoe het werkt</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <div>
               <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center mb-4">
                 <span className="text-blue-600 font-bold">1</span>
@@ -219,9 +242,18 @@ export default function HomePage() {
               <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center mb-4">
                 <span className="text-blue-600 font-bold">3</span>
               </div>
-              <h3 className="font-semibold text-gray-900 mb-2">Frontend Display</h3>
+              <h3 className="font-semibold text-gray-900 mb-2">Frontend & Huizen</h3>
               <p className="text-gray-600 text-sm">
-                Deze website haalt JSON bestanden op en toont alle contractgegevens in een overzichtelijke interface.
+                De site toont contracten per pand en de 10 documentcategorieën. Zoek, filter en sorteer op huizen.
+              </p>
+            </div>
+            <div>
+              <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center mb-4">
+                <span className="text-green-600 font-bold">4</span>
+              </div>
+              <h3 className="font-semibold text-gray-900 mb-2">Whise: direct pushen</h3>
+              <p className="text-gray-600 text-sm">
+                Elk contract dat klaar is (confidence ≥ 95%) wordt direct naar Whise gepusht — ook als maar 1/10 van een huis compleet is. Geen wachten op andere contracten of huizen.
               </p>
             </div>
           </div>
