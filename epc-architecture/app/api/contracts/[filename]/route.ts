@@ -4,6 +4,8 @@ import { logger } from '../../../../lib/logger';
 import { validateFilename } from '../../../../lib/validation';
 import { getSupabaseContracts } from '../../../../lib/supabase-server';
 
+type ContractRow = { name: string; data: Record<string, unknown> };
+
 // Initialize Dropbox client for TARGET (JSON storage)
 async function getDropboxClient() {
   const APP_KEY_TARGET = process.env.APP_KEY_TARGET;
@@ -68,7 +70,8 @@ export async function GET(
           { status: 404 }
         );
       }
-      const jsonData = { ...row.data, filename: row.name };
+      const r = row as ContractRow;
+      const jsonData = { ...r.data, filename: r.name };
       logger.info('Successfully loaded contract from Supabase', { filename });
       return NextResponse.json(jsonData);
     }
@@ -205,7 +208,7 @@ export async function PATCH(
           { status: 404 }
         );
       }
-      originalData = row.data || {};
+      originalData = (row as ContractRow).data || {};
       if (originalData.edit_history && Array.isArray(originalData.edit_history)) {
         editHistory = originalData.edit_history;
       }

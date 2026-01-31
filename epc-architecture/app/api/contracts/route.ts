@@ -3,6 +3,8 @@ import { Dropbox } from 'dropbox';
 import { logger } from '../../../lib/logger';
 import { getSupabaseContracts } from '../../../lib/supabase-server';
 
+type ContractRow = { name: string; data: Record<string, unknown>; updated_at?: string };
+
 // Initialize Dropbox client for TARGET (alleen nog voor fallback of CSV; JSON in Supabase)
 async function getDropboxClient() {
   const APP_KEY_TARGET = process.env.APP_KEY_TARGET;
@@ -23,7 +25,7 @@ async function getDropboxClient() {
   return dbx;
 }
 
-function mapRowToContract(row: { name: string; data: any; updated_at?: string }) {
+function mapRowToContract(row: ContractRow) {
   const jsonData = row.data || {};
   const contractData = jsonData.contract_data || {};
   const pand = contractData.pand || {};
@@ -59,7 +61,7 @@ export async function GET() {
         logger.error('Supabase contracts list error', { error: error.message });
         throw new Error(error.message);
       }
-      const contractsWithData = (rows || []).map(mapRowToContract);
+      const contractsWithData = (rows || []).map((r) => mapRowToContract(r as ContractRow));
       logger.info('Contracts loaded from Supabase', { count: contractsWithData.length });
       return NextResponse.json({
         contracts: contractsWithData,
