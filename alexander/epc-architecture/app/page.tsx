@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { FileText, TrendingUp, CheckCircle, AlertCircle, Clock, ArrowRight, Database, Building2 } from 'lucide-react';
+import { FileText, TrendingUp, CheckCircle, AlertCircle, Clock, ArrowRight, Database, Building2, User } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 interface Stats {
   total: number;
@@ -72,20 +73,28 @@ export default function HomePage() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-auto p-6">
-        {/* Header */}
+        {/* Header: titel links, account-knop rechts boven */}
         <div className="mb-8 md:mb-12">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-4">
-            <div className="h-14 w-14 sm:h-16 sm:w-16 rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border-2 border-primary/20 flex items-center justify-center shrink-0 shadow-sm">
-              <FileText className="h-7 w-7 sm:h-8 sm:w-8 text-primary" />
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-1 min-w-0">
+              <div className="h-14 w-14 sm:h-16 sm:w-16 rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border-2 border-primary/20 flex items-center justify-center shrink-0 shadow-sm">
+                <FileText className="h-7 w-7 sm:h-8 sm:w-8 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-2xl sm:text-4xl font-bold text-gray-900">
+                  Document Hub
+                </h1>
+                <p className="text-base sm:text-xl text-gray-600 mt-1 sm:mt-2">
+                  Automatische analyse en extractie van huurcontracten uit Dropbox
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h1 className="text-2xl sm:text-4xl font-bold text-gray-900">
-                Document Hub
-              </h1>
-              <p className="text-base sm:text-xl text-gray-600 mt-1 sm:mt-2">
-                Automatische analyse en extractie van huurcontracten uit Dropbox
-              </p>
-            </div>
+            <Link href="/login" className="shrink-0">
+              <Button variant="outline" size="sm" className="gap-2 text-foreground border-border hover:bg-accent">
+                <User className="h-4 w-4" />
+                Account
+              </Button>
+            </Link>
           </div>
         </div>
 
