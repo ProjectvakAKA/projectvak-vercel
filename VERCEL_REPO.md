@@ -1,26 +1,52 @@
-# Code naar een tweede repo pushen (voor Vercel)
+# Code naar Vercel pushen (zonder team-repo)
 
-Zo kun je alles naar een **eigen repo** pushen en die op Vercel koppelen, zonder de gedeelde team-repo te gebruiken.
+## Alleen naar Vercel pushen (niet naar team)
 
-## Stappen
+In de projectmap:
 
-1. **Nieuwe repository op GitHub**
-   - Ga naar [GitHub](https://github.com/new).
-   - Maak een nieuwe repo (bijv. `projectvak-vercel` of `mijn-epc-app`).
-   - Laat "Add a README" uit; de repo mag leeg zijn.
-   - Kopieer de HTTPS-URL (bijv. `https://github.com/jouw-username/projectvak-vercel.git`).
+```bash
+./push-alleen-vercel.sh
+```
 
-2. **Pushen naar die repo**
-   In de map van dit project:
-   ```bash
-   ./push-to-vercel-repo.sh https://github.com/jouw-username/projectvak-vercel.git
-   ```
-   (Vervang de URL door jouw repo-URL.)
+Of handmatig:
 
-3. **Vercel koppelen**
-   - Ga naar [Vercel](https://vercel.com) → New Project.
-   - Importeer de **nieuwe** repo (niet de team-repo).
-   - Als je alleen de Next.js-app wilt deployen: zet **Root Directory** op `epc-architecture` of `alexander/epc-architecture`, afhankelijk van waar je vandaan bouwt.
-   - Voeg je env vars toe (o.a. `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`).
+```bash
+git push vercel main
+```
 
-Daarna bouwt Vercel uit jouw eigen repo; de team-repo blijft onaangeroerd.
+Daarmee gaat alles **alleen** naar `https://github.com/ProjectvakAKA/projectvak-vercel.git`.  
+**origin** (team-repo) wordt **niet** geüpdatet.
+
+---
+
+## Als push faalt (GitHub-login)
+
+- **Terminal:** Log in met `gh auth login` (GitHub CLI) of gebruik SSH.
+- **Of:** Open de repo op GitHub in de browser → Code → push via GitHub Desktop of een andere client waar je al ingelogd bent.
+
+---
+
+## Vercel Dashboard – als Vercel “niets doet”
+
+1. **Juiste repo gekoppeld?**  
+   Vercel → jouw project → **Settings** → **Git**  
+   De gekoppelde repo moet **ProjectvakAKA/projectvak-vercel** zijn (niet de team-repo).
+
+2. **Root Directory zetten**  
+   Vercel → **Settings** → **General** → **Root Directory**  
+   - Klik **Edit**  
+   - Zet op: **`alexander/epc-architecture`** (geen slash vooraan)  
+   - **Save**
+
+3. **Deploy handmatig starten**  
+   Vercel → **Deployments**  
+   - Bij de laatste deployment: **…** (drie puntjes) → **Redeploy**  
+   - Of: **Create Deployment** → kies branch **main** → **Deploy**
+
+4. **Environment Variables**  
+   **Settings** → **Environment Variables**  
+   Voeg de variabelen uit `env-voor-vercel.txt` toe (Production, Preview, Development).
+
+5. **Nog steeds niets?**  
+   Maak een **nieuw project** in Vercel: **Add New** → **Project** → **Import** → kies **ProjectvakAKA/projectvak-vercel**.  
+   Daarna meteen **Root Directory** = `alexander/epc-architecture` zetten en env vars toevoegen, dan deployen.
