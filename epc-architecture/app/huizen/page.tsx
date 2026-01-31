@@ -499,7 +499,11 @@ export default function HuizenPage() {
                   </p>
                 </div>
               )}
-              <ScrollArea className="flex-1 min-h-0">
+              {/* Native scroll container: werkt op mobiel (touch); ScrollArea gaf problemen */}
+              <div
+                className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
+                style={{ WebkitOverflowScrolling: 'touch' }}
+              >
                 <div className={cn('space-y-1', level === 1 ? 'p-6' : 'p-2')}>
                   {loading ? (
                     <div className="p-4 text-muted-foreground text-sm">Laden...</div>
@@ -638,7 +642,7 @@ export default function HuizenPage() {
                     </div>
                   )}
                 </div>
-              </ScrollArea>
+              </div>
             </div>
             )}
             {level === 2 && !level2HuizenCollapsed && (
