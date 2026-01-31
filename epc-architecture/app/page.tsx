@@ -73,16 +73,16 @@ export default function HomePage() {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-auto p-6">
         {/* Header */}
-        <div className="mb-12">
-          <div className="flex items-center gap-4 mb-4">
-            <div className="h-16 w-16 rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border-2 border-primary/20 flex items-center justify-center shrink-0 shadow-sm">
-              <FileText className="h-8 w-8 text-primary" />
+        <div className="mb-8 md:mb-12">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-4">
+            <div className="h-14 w-14 sm:h-16 sm:w-16 rounded-xl bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border-2 border-primary/20 flex items-center justify-center shrink-0 shadow-sm">
+              <FileText className="h-7 w-7 sm:h-8 sm:w-8 text-primary" />
             </div>
-            <div>
-              <h1 className="text-4xl font-bold text-gray-900">
+            <div className="min-w-0">
+              <h1 className="text-2xl sm:text-4xl font-bold text-gray-900">
                 Document Hub
               </h1>
-              <p className="text-xl text-gray-600 mt-2">
+              <p className="text-base sm:text-xl text-gray-600 mt-1 sm:mt-2">
                 Automatische analyse en extractie van huurcontracten uit Dropbox
               </p>
             </div>

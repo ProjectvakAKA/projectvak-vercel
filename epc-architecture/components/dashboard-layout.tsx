@@ -2,12 +2,12 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Home, ChevronLeft, Building2 } from "lucide-react"
+import { Home, ChevronLeft, Building2, Menu } from "lucide-react"
 import { SidebarContext } from "@/components/sidebar-context"
 
 const navigation = [
@@ -18,18 +18,34 @@ const navigation = [
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(true)
+  const [mobileOpen, setMobileOpen] = useState(false)
+
+  // Sluit mobiel menu bij navigatie
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [pathname])
 
   return (
     <SidebarContext.Provider value={{ collapsed, setCollapsed }}>
-      <div className="flex h-screen bg-background">
-        {/* Sidebar */}
+      <div className="flex h-screen bg-background min-w-0">
+        {/* Mobiele menuknop: alleen zichtbaar op kleine schermen */}
+        <div className="md:hidden fixed top-0 left-0 right-0 z-40 h-10 flex items-center gap-2 px-3 border-b border-border bg-sidebar shrink-0">
+          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setMobileOpen(true)} title="Menu openen" aria-label="Menu openen">
+            <Menu className="h-5 w-5" />
+          </Button>
+          <span className="font-semibold text-foreground text-sm truncate">Document Hub</span>
+        </div>
+
+        {/* Sidebar: op desktop altijd zichtbaar, op mobiel overlay */}
         <aside
           className={cn(
-            "flex flex-col border-r border-border bg-sidebar transition-all duration-300",
+            "flex flex-col border-r border-border bg-sidebar transition-all duration-300 z-50",
+            "md:relative md:flex",
             collapsed ? "w-16" : "w-64",
+            mobileOpen ? "fixed inset-y-0 left-0 md:relative" : "hidden md:flex",
           )}
         >
-          {/* Logo + toggle bovenaan: blauwe knop om uit te klappen wanneer ingeklapt */}
+          {/* Logo + toggle bovenaan; op mobiel ook sluitknop */}
           <div className="flex h-10 items-center border-b border-border px-2 gap-1 shrink-0">
             <Button
               variant="ghost"
@@ -38,7 +54,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
                 "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg p-0",
                 collapsed && "bg-gradient-to-br from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70"
               )}
-              onClick={() => collapsed && setCollapsed(false)}
+              onClick={() => { if (collapsed) setCollapsed(false); setMobileOpen(false); }}
               title={collapsed ? "Sidebar uitklappen" : "Document Hub"}
             >
               <Building2 className={cn("h-4 w-4", collapsed ? "text-primary-foreground" : "text-primary")} />
@@ -46,7 +62,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             {!collapsed && (
               <>
                 <span className="font-semibold text-foreground text-sm truncate flex-1">Document Hub</span>
-                <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setCollapsed(true)} title="Sidebar inklappen">
+                <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => { setCollapsed(true); setMobileOpen(false); }} title="Sidebar inklappen">
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
               </>
@@ -87,8 +103,13 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
           </nav>
         </aside>
 
-        {/* Main content */}
-        <main className="flex-1 overflow-auto">{children}</main>
+        {/* Overlay op mobiel wanneer sidebar open */}
+        {mobileOpen && (
+          <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setMobileOpen(false)} aria-hidden />
+        )}
+
+        {/* Main content: op mobiel ruimte voor vaste header */}
+        <main className="flex-1 overflow-auto min-w-0 pt-10 md:pt-0">{children}</main>
       </div>
     </SidebarContext.Provider>
   )
