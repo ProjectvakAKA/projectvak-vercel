@@ -13,7 +13,7 @@ const statusConfig: Record<DocumentStatus, { label: string; className: string }>
     className: "bg-status-warning/20 text-status-warning border-status-warning/30",
   },
   pushed: {
-    label: "Complete",
+    label: "Gepusht",
     className: "bg-primary/20 text-primary border-primary/30",
   },
   error: {

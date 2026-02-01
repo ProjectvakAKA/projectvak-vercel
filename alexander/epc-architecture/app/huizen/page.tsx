@@ -92,6 +92,8 @@ function countCategoriesFulfilled(contracts: ContractFile[]): number {
 type ContractStatus = 'pushed' | 'needs_review' | 'error' | 'pending' | 'manually_edited'
 function getContractStatus(c: ContractFile): ContractStatus {
   if ((c as any).edited?.timestamp || (c as any).manually_edited) return 'manually_edited'
+  // Gepusht naar Whise (uit API of na push in sessie) = altijd als pushed tonen op niv 1 en 2
+  if ((c as any).whise_pushed === true) return 'pushed'
   if (!c.confidence) return 'pending'
   if (c.confidence >= 95) return 'pushed'
   if (c.confidence >= 60) return 'needs_review'
@@ -139,6 +141,7 @@ export default function HuizenPage() {
   const [sortBy, setSortBy] = useState<SortOption>('label-asc')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [pushedToWhiseDocNames, setPushedToWhiseDocNames] = useState<Set<string>>(() => new Set())
+  const [manualPushDocNames, setManualPushDocNames] = useState<Set<string>>(() => new Set())
   const [level2HuizenCollapsed, setLevel2HuizenCollapsed] = useState(false)
   const sidebar = useSidebar()
 
@@ -521,7 +524,7 @@ export default function HuizenPage() {
                     <div className="grid gap-4">
                       {filteredAndSortedHuizen.map(({ key, label, contracts: houseContracts }) => {
                         const houseStatus = getHouseStatus(houseContracts, pushedToWhiseDocNames)
-                        const pushedCount = houseContracts.filter(c => getContractStatus(c) === 'pushed' || pushedToWhiseDocNames.has(c.name)).length
+                        const pushedCount = houseContracts.filter(c => getEffectiveContractStatus(c, pushedToWhiseDocNames) === 'pushed').length
                         const avgConf = houseContracts.length ? Math.round(houseContracts.reduce((a, c) => a + (c.confidence ?? 0), 0) / houseContracts.length) : 0
                         const catsFulfilled = countCategoriesFulfilled(houseContracts)
                         const statusBadgeClass = {
@@ -669,7 +672,7 @@ export default function HuizenPage() {
                         const docs = getContractsForCategory(selectedHuis.contracts, cat.id)
                         const count = docs.length
                         const avgConf = count ? docs.reduce((a, d) => a + (d.confidence ?? 0), 0) / count : 0
-                        const pushedCount = count ? docs.filter(d => getContractStatus(d) === 'pushed' || pushedToWhiseDocNames.has(d.name)).length : 0
+                        const pushedCount = count ? docs.filter(d => getEffectiveContractStatus(d, pushedToWhiseDocNames) === 'pushed').length : 0
                         return (
                           <button
                             key={cat.id}
@@ -705,7 +708,7 @@ export default function HuizenPage() {
                     </div>
                     <div>
                       <div className="text-foreground font-medium">Whise</div>
-                      <div className="text-base font-semibold tabular-nums">{selectedHuis.contracts.filter(c => getContractStatus(c) === 'pushed' || pushedToWhiseDocNames.has(c.name)).length}</div>
+                      <div className="text-base font-semibold tabular-nums">{selectedHuis.contracts.filter(c => getEffectiveContractStatus(c, pushedToWhiseDocNames) === 'pushed').length}</div>
                     </div>
                   </div>
                 </div>
@@ -762,7 +765,10 @@ export default function HuizenPage() {
                     filename={editingDocName}
                     onBack={() => setEditingDocName(null)}
                     embedded
-                    onPushedToWhise={(name) => setPushedToWhiseDocNames((prev) => new Set(prev).add(name))}
+                    onPushedToWhise={(name, isManual) => {
+                      setPushedToWhiseDocNames((prev) => new Set(prev).add(name))
+                      if (isManual) setManualPushDocNames((prev) => new Set(prev).add(name))
+                    }}
                     onContractUpdated={(name) => {
                       setContracts((prev) => prev.map((c) => c.name === name ? { ...c, manually_edited: true, edited: { timestamp: new Date().toISOString(), edited_by: 'user' } } : c))
                     }}
@@ -797,7 +803,7 @@ export default function HuizenPage() {
                                   <div className="text-xs text-muted-foreground truncate">{doc.name}</div>
                                   {isPushedToWhise && (
                                     <div className="text-xs text-muted-foreground mt-1">
-                                      Reeds {(doc as any)?.whise_push_manual === true ? 'handmatig' : 'automatisch'} naar Whise gepusht
+                                      Reeds {(doc as any)?.whise_push_manual === true || manualPushDocNames.has(doc.name) ? 'handmatig' : 'automatisch'} naar Whise gepusht
                                     </div>
                                   )}
                                 </div>
