@@ -1,0 +1,123 @@
+================================================================================
+DOCUMENT PIPELINE – ALLE STAPPEN + OPTIES EN PRIJZEN
+================================================================================
+Gebaseerd op: ordenen/hernomen, OCR of tekstlaag, EPC/contract-extractie, alles in JSON.
+Schatting voor ~150 pagina's of vergelijkbaar volume (eenmalig).
+================================================================================
+
+STAP 1: BEPALEN WAT HET DOCUMENT IS (type, map, bestandsnaam)
+-------------------------------------------------------------
+Doel: "Waar hoort dit? Hoe noemen we het bestand?"
+
+  Optie A – Gemini (bijv. 1.5 Flash)
+    • Prijs: ~€0,02 voor 150 pag. (of binnen free tier)
+    • Voordeel: al in gebruik, weinig aanpassing
+
+  Optie B – OpenAI gpt-4o-mini
+    • Prijs: ~€0,03 voor 150 pag.
+    • Voordeel: vaak consistenter voor korte beslissingen
+
+--------------------------------------------------------------------------------
+
+STAP 2: TEKST UIT HET DOCUMENT HALEN
+-------------------------------------------------------------
+Doel: Van PDF/image naar leesbare tekst (voor regels of AI).
+
+  Optie A – PDF met tekstlaag (geen scan)
+    • Tool: PyMuPDF / pdfplumber / PyPDF2 (Python)
+    • Prijs: €0 (alleen code, geen API)
+    • Gebruik: als het een "normale" PDF is met selecteerbare tekst
+
+  Optie B – Scan of foto (geen tekstlaag) → OCR nodig
+    • Optie B1 – Tesseract (lokaal)
+      Prijs: €0
+      Voordeel: gratis, offline, geen quota
+    • Optie B2 – Google Cloud Vision API
+      Prijs: eerste 1000 pagina's/maand gratis, daarna ~€1,50–3 per 1000 afbeeldingen
+      Voordeel: vaak betere kwaliteit op lastige scans
+
+--------------------------------------------------------------------------------
+
+STAP 3: EPC / VASTE FORMULIEREN → GESTRUCTUREERDE DATA (JSON)
+-------------------------------------------------------------
+Doel: Velden uit EPC-certificaten halen (energielabel, oppervlakte, adres, …).
+Geen AI nodig als het formulier vast is.
+
+  Optie A – Regels + regex op de tekst (aanbevolen voor EPC)
+    • Prijs: €0
+    • Werkt op: tekst uit Stap 2 (PDF-text of OCR)
+    • Geen Tesseract/AI in deze stap zelf – alleen code
+
+  Optie B – AI (bijv. gpt-4o-mini) voor EPC
+    • Prijs: ~€0,01–0,03 per document (als fallback of als je geen regels wilt)
+    • Gebruik: alleen als regels niet lukken (rare layout, onleesbaar)
+
+--------------------------------------------------------------------------------
+
+STAP 4: CONTRACTEN (VARIABELE VORM) → GESTRUCTUREERDE DATA (JSON)
+-------------------------------------------------------------
+Doel: Partijen, pand, EPC, kadaster, huurprijs, … uit contracttekst halen.
+
+  Optie A – Eerst regels + regex, AI alleen als fallback (aanbevolen)
+    • Regels: €0
+    • AI fallback (bijv. gpt-4o-mini): ~€0,02–0,05 per contract dat onduidelijk is
+    • Totaal: laag, want veel contracten via regels
+
+  Optie B – Altijd AI voor contract-extractie
+    • Optie B1 – gpt-4o-mini: ~€0,03 voor 150 pag. aan contracttekst
+    • Optie B2 – Groq (gratis tier) of Ollama (lokaal): €0
+    • Nadeel: meer variatie in output dan regels
+
+--------------------------------------------------------------------------------
+
+STAP 5: SAMENVATTING GENEREREN (optioneel)
+-------------------------------------------------------------
+Doel: Korte samenvatting van contract voor overzicht.
+
+  Optie A – gpt-4o-mini
+    • Prijs: ~€0,01–0,02 per contract (korte output)
+
+  Optie B – Groq of Ollama (lokaal)
+    • Prijs: €0 (binnen free tier / lokaal)
+
+--------------------------------------------------------------------------------
+
+STAP 6: OPSLAAN IN JSON
+-------------------------------------------------------------
+Doel: Alle geëxtraheerde velden + metadata in vaste JSON-structuur.
+
+  Optie A – Lokaal / eigen server (bijv. Dropbox + Supabase zoals nu)
+    • Prijs: €0 (alleen je eigen opslag/API-kosten)
+
+  Optie B – Alleen cloud-opslag (bijv. alleen Supabase)
+    • Prijs: afhankelijk van Supabase-plan; free tier vaak voldoende
+
+================================================================================
+TOTAALOVERZICHT KOSTEN (indicatief, 150 pagina's, één keer door het proces)
+================================================================================
+
+  Minimaal (veel regels, Tesseract, weinig AI):
+    • Stap 1: Gemini free tier of ~€0,02
+    • Stap 2: €0 (PDF-text + Tesseract)
+    • Stap 3: €0 (regels)
+    • Stap 4: €0–0,05 (alleen AI voor lastige contracten)
+    • Stap 5: €0 (Groq/Ollama) of ~€0,02 (gpt-4o-mini)
+    • Stap 6: €0
+    → Totaal: ongeveer €0 – €0,10
+
+  Iets meer AI (ordenen + contracten via AI):
+    • Stap 1: ~€0,02–0,03
+    • Stap 2: €0 (Tesseract) of weinig (Vision)
+    • Stap 3: €0 (regels voor EPC)
+    • Stap 4: ~€0,03–0,05 (gpt-4o-mini)
+    • Stap 5: ~€0,02
+    • Stap 6: €0
+    → Totaal: ongeveer €0,07 – €0,15
+
+================================================================================
+AANBEVELING IN ÉÉN ZIN
+================================================================================
+Ordeneren: Gemini of gpt-4o-mini. Tekst: PDF-library + Tesseract (Vision als backup).
+EPC: regels. Contracten: regels eerst, gpt-4o-mini of Ollama alleen als fallback.
+Alles in JSON. Dan laagste kosten en meest consistente output.
+================================================================================

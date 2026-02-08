@@ -29,6 +29,12 @@ from pdf2image import convert_from_bytes
 from PIL import Image
 from dotenv import load_dotenv
 
+try:
+    from gemini_key_rotator import get_next_key, get_state_summary
+except ImportError:
+    get_next_key = None
+    get_state_summary = None  # fallback: use single key
+
 # Load .env from script dir en project root, zodat Supabase altijd geladen is (niet afhankelijk van cwd)
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _env_loaded = load_dotenv(os.path.join(_script_dir, '.env'))
@@ -67,6 +73,21 @@ APP_SECRET_SOURCE_FULL = os.getenv('APP_SECRET_SOURCE_FULL')
 REFRESH_TOKEN_SOURCE_FULL = os.getenv('REFRESH_TOKEN_SOURCE_FULL')
 GEMINI_API_KEY_ORGANIZE = os.getenv('GEMINI_API_KEY_ORGANIZE')
 
+def _has_organize_keys():
+    """True if at least one of KEY_1..KEY_21 is set."""
+    for i in range(1, 22):
+        if os.getenv(f'GEMINI_API_KEY_{i}', '').strip():
+            return True
+    return False
+
+def _first_organize_key():
+    """Eerste van de 21 keys voor init/model-listing (verbruikt geen rotator-slot)."""
+    for i in range(1, 22):
+        k = os.getenv(f'GEMINI_API_KEY_{i}', '').strip()
+        if k:
+            return k
+    return None
+
 # FASE 2: ANALYSEER (Read-only SOURCE)
 APP_KEY_SOURCE_RO = os.getenv('APP_KEY_SOURCE_RO')
 APP_SECRET_SOURCE_RO = os.getenv('APP_SECRET_SOURCE_RO')
@@ -98,10 +119,10 @@ SCAN_ROOT = ''
 CHECK_INTERVAL = 20
 BATCH_SIZE = 5
 
-# History files
-ORGANIZED_HISTORY = "organized_history.txt"
-ANALYZED_HISTORY = "analyzed_docs.txt"
-FOLDER_CACHE = "folder_structure.json"
+# History files: vast pad in alexander/ zodat cwd geen verschil maakt (geen dubbele verwerking)
+ORGANIZED_HISTORY = os.path.join(_script_dir, "organized_history.txt")
+ANALYZED_HISTORY = os.path.join(_script_dir, "analyzed_docs.txt")
+FOLDER_CACHE = os.path.join(_script_dir, "folder_structure.json")
 
 # CSV log in TARGET
 CSV_LOG_PATH = "/verwerking_log.csv"
@@ -179,7 +200,7 @@ def validate_credentials() -> bool:
         'APP_KEY_SOURCE_FULL': APP_KEY_SOURCE_FULL,
         'APP_SECRET_SOURCE_FULL': APP_SECRET_SOURCE_FULL,
         'REFRESH_TOKEN_SOURCE_FULL': REFRESH_TOKEN_SOURCE_FULL,
-        'GEMINI_API_KEY_ORGANIZE': GEMINI_API_KEY_ORGANIZE,
+        'GEMINI_API_KEY_1..21': _has_organize_keys(),
         'APP_KEY_SOURCE_RO': APP_KEY_SOURCE_RO,
         'APP_SECRET_SOURCE_RO': APP_SECRET_SOURCE_RO,
         'REFRESH_TOKEN_SOURCE_RO': REFRESH_TOKEN_SOURCE_RO,
@@ -192,7 +213,7 @@ def validate_credentials() -> bool:
         'RECIPIENT_EMAIL': RECIPIENT_EMAIL[0] if RECIPIENT_EMAIL else None
     }
     
-    missing = [key for key, value in required_creds.items() if not value]
+    missing = [key for key, value in required_creds.items() if value is False or value is None or (isinstance(value, str) and not value.strip())]
     
     if missing:
         logger.error("=" * 60)
@@ -739,33 +760,47 @@ def format_file_size(size_bytes):
     return f"{size_bytes:.1f} TB"
 
 
+def _normalize_dropbox_path(path):
+    """Eén vorm voor paden zodat history-check geen dubbele verwerking toelaat."""
+    if not path:
+        return path
+    p = path.strip()
+    return f"/{p.lstrip('/')}" if p else p
+
+
 def load_history(filename):
-    """Load processed files from history"""
+    """Load processed files from history (paden genormaliseerd)."""
     try:
         with open(filename, 'r', encoding='utf-8') as f:
-            return set(line.strip() for line in f if line.strip())
+            return set(_normalize_dropbox_path(line) for line in f if line.strip())
     except FileNotFoundError:
         return set()
 
 
 def add_to_history(filename, path):
-    """Add file to history"""
+    """Add file to history (pad genormaliseerd)."""
+    norm = _normalize_dropbox_path(path)
+    if not norm:
+        return
     try:
         with open(filename, 'a', encoding='utf-8') as f:
-            f.write(f"{path}\n")
+            f.write(f"{norm}\n")
     except Exception as e:
         print(f"⚠️  History update failed: {e}")
 
 
 def remove_from_history(filename, path):
-    """Remove file from history (to requeue for retry)"""
+    """Remove file from history (to requeue for retry). Pad genormaliseerd."""
+    norm = _normalize_dropbox_path(path)
+    if not norm:
+        return
     try:
         # Read all lines
         with open(filename, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
-        # Filter out the path to remove
-        filtered_lines = [line for line in lines if line.strip() != path]
+        # Filter out the path to remove (vergelijk genormaliseerd)
+        filtered_lines = [line for line in lines if _normalize_dropbox_path(line) != norm]
         
         # Write back
         with open(filename, 'w', encoding='utf-8') as f:
@@ -936,15 +971,16 @@ def init_clients():
         return None
     
     try:
-        # Gemini clients first - create clients (they'll fail when used if API key is invalid)
-        # This allows code to start and fail gracefully when actually using Gemini
-        client_organize = genai.Client(api_key=GEMINI_API_KEY_ORGANIZE)
+        # ORGANIZE: alleen KEY_1..KEY_21 (rotator in organize_batch). Init = eerste key voor model-listing.
+        first_organize_key = _first_organize_key()
+        client_organize = genai.Client(api_key=first_organize_key) if first_organize_key else None
+        # ANALYZE: alleen GEMINI_API_KEY_ANALYZE. Contractverwerking nooit met de 21 organize-keys.
         client_analyze = genai.Client(api_key=GEMINI_API_KEY_ANALYZE)
 
         # Try to dynamically select best available model, fallback to default if API key invalid
         model_id = None
         try:
-            all_models = client_organize.models.list()
+            all_models = client_organize.models.list() if client_organize else []
             generative_models = []
             for m in all_models:
                 model_name = m.name.replace('models/', '')
@@ -1195,95 +1231,161 @@ def extract_text_vision(images: List[bytes], gemini_client, model) -> str:
 # PHASE 1: SMART CLASSIFICATION
 # ============================================================================
 
+def _force_non_contract_out_of_contract_folders(result: dict, filename: str) -> dict:
+    """Zorg dat verhaal/essay/onderwijs/factuur NOOIT in /Onbekend_adres of /Contracten komen (code-fix na AI)."""
+    folder_path = (result.get('folder_path') or '').strip()
+    reasoning = (result.get('reasoning') or '').lower()
+    suggested = (result.get('suggested_filename') or '').lower()
+    name_lower = filename.lower()
+
+    # Alleen ingrijpen als AI een contract-map heeft gegeven
+    if 'onbekend_adres' not in folder_path.lower() and '/contracten/' not in folder_path.lower():
+        return result
+
+    # Signalen dat het GEEN contract is (certificaat, verklaring, verhaal, onderwijs, factuur, …)
+    non_contract_signals = [
+        'verhaal', 'essay', 'narratief', 'persoonlijke tekst', 'geen contract',
+        'onderwijs', 'college', 'cursus', 'dictaat', 'studie',
+        'certificaat', 'verklaring', 'deelname', 'studentenverklaring', 'bewijs',
+        'factuur', 'offerte', 'betalingsdocument',
+        'teksten', 'overig'
+    ]
+    is_likely_non_contract = any(s in reasoning or s in suggested or s in name_lower for s in non_contract_signals)
+
+    if not is_likely_non_contract:
+        return result
+
+    # Override naar inhoud-map (geen contract-map); hernoem weg van Onbekend_adres_*
+    if any(s in reasoning or s in suggested or s in name_lower for s in ['verhaal', 'essay', 'narratief', 'tekst']):
+        result['folder_path'] = '/Verhaal'
+        result['suggested_filename'] = 'verhaal_document.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: verhaal/essay → /Verhaal.]'
+    elif any(s in reasoning or s in suggested or s in name_lower for s in ['certificaat', 'verklaring', 'deelname', 'studentenverklaring', 'bewijs']):
+        result['folder_path'] = '/Onderwijs'
+        result['suggested_filename'] = 'certificaat_verklaring.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: certificaat/verklaring → /Onderwijs.]'
+    elif any(s in reasoning or s in suggested or s in name_lower for s in ['onderwijs', 'college', 'cursus', 'dictaat']):
+        result['folder_path'] = '/Onderwijs'
+        result['suggested_filename'] = 'onderwijs_document.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: onderwijs → /Onderwijs.]'
+    elif any(s in reasoning or s in suggested or s in name_lower for s in ['factuur', 'offerte']):
+        result['folder_path'] = '/Facturen'
+        result['suggested_filename'] = 'factuur_document.pdf'
+    else:
+        result['folder_path'] = '/Verhaal'
+        result['suggested_filename'] = 'document.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: geen contract → /Verhaal.]'
+
+    return result
+
+
 def smart_classify(text: str, filename: str, current_location: str,
                    existing_folders: str, gemini_client, model, pdf_metadata: dict) -> Optional[Dict]:
-    """AI decides folder structure with STRICT differentiation"""
+    """AI classificeert documenten: contracten → type-map + submap adres; overige → inhoud-map (Verhaal, EPC, etc.)."""
 
     text_sample = text[:TEXT_SAMPLE_SIZE] if len(text) > TEXT_SAMPLE_SIZE else text
 
     extraction_method = pdf_metadata.get('extraction_method', 'text')
     method_note = " (OCR used)" if extraction_method == "ocr" else ""
 
-    prompt = f"""SYSTEM: Je bent een EXPERT documentclassificeerder. NIVEAU 1 = één map per ADRES. Alle documenten voor hetzelfde adres gaan in dezelfde map.
+    prompt = f"""SYSTEM: Je bent een EXPERT documentclassificeerder. Je bepaalt EERST het type document, DAARNA de mapstructuur.
 
-CRITICAL: folder_path is ALTIJD /Adres (bv. /Kerkstraat_10, /Eikelstraat_22). Geen submappen op type. Als het adres uit het document al als map bestaat in EXISTING FOLDERS → action "existing" en die folder_path. Anders → action "new" en folder_path = /Adres (nieuwe map aanmaken).
+CRITICAL: /Onbekend_adres is ALLEEN voor CONTRACTEN (huur, EPC, eigendomstitel, …) waar het adres niet uit de tekst komt. Verhalen, essays, onderwijs, facturen → NOOIT /Onbekend_adres. Verhaal/essay/narratief → ALTIJD /Verhaal.
 
 FILENAME: {filename}
 LOCATION: {current_location}
 EXTRACTION: {pdf_metadata.get('pages_scanned', '?')}/{pdf_metadata.get('total_pages', '?')} pages{method_note}
 
-EXISTING FOLDERS (niveau 1 = adres-mappen; nieuwe doc voor zelfde adres → zelfde map):
+EXISTING FOLDERS (bestaande mappen; kijk of jouw folder_path hier al in voorkomt → action "existing", anders "new"):
 {existing_folders if existing_folders else "Geen mappen nog - eerste document."}
 
 DOCUMENT TEXT:
 {text_sample}
 
 ═══════════════════════════════════════════════════════════════════
-REGELS - NIVEAU 1 = ADRES
+REGELS
 ═══════════════════════════════════════════════════════════════════
 
-1. ADRES BEPALEN:
-   - Haal straat + nummer uit de tekst (bv. Kerkstraat 10 → folder_path /Kerkstraat_10). Spaties/tekens → underscore in mapnaam.
-   - Als geen adres of onzeker → folder_path /Onbekend_adres.
+1. BEPAAL HET TYPE DOCUMENT (uit inhoud, niet uit bestandsnaam):
+   - Huurcontract / huurovereenkomst → CONTRACT, type Huurcontracten
+   - EPC / energieprestatiecertificaat / energiedocument → CONTRACT, type EPC
+   - Eigendomstitel / akte → CONTRACT, type Eigendomstitel
+   - Koopcontract / verkoopovereenkomst → CONTRACT, type Koopcontracten
+   - Verhaal, essay, persoonlijke tekst, narratief, kort verhaal → NIET CONTRACT → folder_path = /Verhaal (NOOIT /Onbekend_adres)
+   - Certificaat, verklaring, studentenverklaring, bewijs van deelname → NIET CONTRACT → folder_path = /Onderwijs (NOOIT /Onbekend_adres)
+   - Onderwijs, college, cursus, studie, dictaat → NIET CONTRACT → map /Onderwijs (eventueel /Onderwijs/Subcategorie)
+   - Factuur, offerte, betalingsdocument → NIET CONTRACT → map /Facturen
+   - Overige zakelijke documenten → map die past bij inhoud (bv. /Correspondentie, /Rapporten)
+   - Twijfel of onduidelijk → /Overig
 
-2. ZELFDE ADRES = ZELFDE MAP:
-   - Als EXISTING FOLDERS al een map heeft voor dat adres (bv. /Kerkstraat_10) → action "existing", folder_path "/Kerkstraat_10". Het nieuwe document wordt in die bestaande map gestoken.
-   - Als dat adres nog geen map heeft → action "new", folder_path "/Kerkstraat_10" (map wordt aangemaakt).
-   - Huurcontract Kerkstraat 10 en EPC Kerkstraat 10 → BEIDE in /Kerkstraat_10 (verschillende bestandsnamen: Kerkstraat_10_huurcontract.pdf, Kerkstraat_10_EPC.pdf).
+2. CONTRACTEN (huur, EPC, eigendomstitel, koop, …):
+   - folder_path = /Contracten/[TypeMap]/[Adres]
+   - TypeMap = Huurcontracten, EPC, Eigendomstitel, Koopcontracten.
+   - Adres = straat + nummer uit de tekst (bv. Kerkstraat_10, Meir_78_bus_3). Alleen bij CONTRACTEN: als geen adres in tekst → Onbekend_adres.
+   - Zelfde adres + zelfde type: als die map al in EXISTING FOLDERS staat → action "existing", anders "new".
+   - suggested_filename = Adres_Type.pdf (bv. Kerkstraat_10_huurcontract.pdf, Meir_78_bus_3_EPC.pdf).
+   Voorbeelden: /Contracten/Huurcontracten/Kerkstraat_10, /Contracten/EPC/Meir_78_bus_3, /Contracten/Eigendomstitel/Onbekend_adres.
 
-3. DOCUMENTTYPE (voor suggested_filename alleen):
-   - Bepaal type: huurcontract, EPC, eigendomstitel, factuur, enz. Gebruik kleine letters in bestandsnaam.
-   - suggested_filename = Adres_Type.pdf (bv. Kerkstraat_10_huurcontract.pdf, Kerkstraat_10_EPC.pdf).
+3. NIET-CONTRACTEN (verhaal, certificaat, verklaring, onderwijs, factuur, …):
+   - Verhaal/essay/narratief → folder_path = /Verhaal. Certificaat/verklaring/studentenverklaring → folder_path = /Onderwijs. NOOIT /Onbekend_adres.
+   - Onderwijs → /Onderwijs of /Onderwijs/Sub. Factuur → /Facturen. Overig → /Teksten, /Overig, etc.
+   - Geen adres in het pad. suggested_filename = korte beschrijvende naam (letters, cijfers, underscores), eindig op .pdf.
 
-4. VOORBEELDEN:
+4. ACTION:
+   - "existing" = folder_path staat al in EXISTING FOLDERS (zelfde pad gebruiken).
+   - "new" = folder_path bestaat nog niet, wordt aangemaakt.
 
-   ✓ Document over Kerkstraat 10, bestaande map /Kerkstraat_10 in EXISTING FOLDERS:
-     → action "existing", folder_path "/Kerkstraat_10", suggested_filename "Kerkstraat_10_huurcontract.pdf" (of EPC, eigendomstitel, etc.)
-
-   ✓ Document over Eikelstraat 22, geen map Eikelstraat_22 nog:
-     → action "new", folder_path "/Eikelstraat_22", suggested_filename "Eikelstraat_22_EPC.pdf"
-
-   ✓ Geen adres in tekst:
-     → action "new" of "existing", folder_path "/Onbekend_adres", suggested_filename "Onbekend_adres_document.pdf"
-
-═══════════════════════════════════════════════════════════════════
-
-VERPLICHT HERNOMEN: Je geeft ALTIJD "suggested_filename" in dit formaat: Adres_Type.pdf
-- Adres = straat + nummer uit de tekst (bv. Kerkstraat_10), spaties/tekens → underscore.
-- Type = wat voor document (bv. huurcontract, EPC, eigendomstitel, factuur). Gebruik kleine letters, geen spaties.
-- Als het ADRES niet in de tekst staat of je bent niet zeker: gebruik "Onbekend_adres".
-- Als het TYPE niet duidelijk is: gebruik "document" in suggested_filename.
-Voorbeelden: Kerkstraat_10_huurcontract.pdf, Onbekend_adres_EPC.pdf, Kerkstraat_10_document.pdf, Eikelstraat_22_eigendomstitel.pdf.
-Alleen letters, cijfers, underscores; eindig op .pdf.
+VERPLICHT: Geef ALTIJD action, folder_path, confidence (0-100), reasoning, suggested_filename.
+- folder_path altijd met leading slash, delen gescheiden door /, geen spaties in mapnamen (gebruik underscore).
+- suggested_filename: alleen letters, cijfers, underscores; eindig op .pdf.
 
 ANTWOORD FORMAT (ALLEEN JSON, geen tekst ervoor/erna):
 
-Bestaande adres-map (document voor Kerkstraat 10, map /Kerkstraat_10 bestaat al):
+Voorbeeld CONTRACT (huurcontract Kerkstraat 10, map bestaat al):
 {{
   "action": "existing",
-  "folder_path": "/Kerkstraat_10",
-  "confidence": 98,
-  "reasoning": "Document over Kerkstraat 10; map /Kerkstraat_10 bestaat al, dus hierin plaatsen",
-  "description": "Kerkstraat 10",
+  "folder_path": "/Contracten/Huurcontracten/Kerkstraat_10",
+  "confidence": 95,
+  "reasoning": "Huurcontract voor Kerkstraat 10; map /Contracten/Huurcontracten/Kerkstraat_10 bestaat al.",
   "suggested_filename": "Kerkstraat_10_huurcontract.pdf"
 }}
 
-Nieuwe adres-map (document over Eikelstraat 22, die map bestaat nog niet):
+Voorbeeld CONTRACT (EPC Meir 78 bus 3, nieuwe map):
 {{
-  "action": "new", 
-  "folder_path": "/Eikelstraat_22",
-  "confidence": 100,
-  "reasoning": "Document over Eikelstraat 22; map bestaat nog niet, aanmaken",
-  "description": "Eikelstraat 22",
-  "suggested_filename": "Eikelstraat_22_EPC.pdf"
+  "action": "new",
+  "folder_path": "/Contracten/EPC/Meir_78_bus_3",
+  "confidence": 98,
+  "reasoning": "Energieprestatiecertificaat voor Meir 78 bus 3; map bestaat nog niet.",
+  "suggested_filename": "Meir_78_bus_3_EPC.pdf"
 }}
 
-Adres onbekend: folder_path "/Onbekend_adres", suggested_filename "Onbekend_adres_huurcontract.pdf"
+Voorbeeld NIET-CONTRACT (verhaal) — ALTIJD /Verhaal, NOOIT /Onbekend_adres:
+{{
+  "action": "new",
+  "folder_path": "/Verhaal",
+  "confidence": 90,
+  "reasoning": "Verhaal/essay/narratief, geen contract; hoort in map Verhaal. Onbekend_adres is alleen voor contracten zonder adres.",
+  "suggested_filename": "verhaal_document.pdf"
+}}
+FOUT: verhaal of certificaat in /Onbekend_adres plaatsen. Onbekend_adres = ALLEEN voor contracten (huur, EPC, …) waar het adres ontbreekt.
 
-CRITICAL CHECKS voor jouw antwoord:
-☐ Heb ik het ADRES uit de tekst gehaald (straat + nummer)?
-☐ Staat dat adres al in EXISTING FOLDERS? → action "existing" + die folder_path. Anders → action "new".
-☐ Heb ik suggested_filename gegeven (Adres_Type.pdf)? Bij onzeker adres: Onbekend_adres.
+Voorbeeld NIET-CONTRACT (certificaat/verklaring) — ALTIJD /Onderwijs, NOOIT /Onbekend_adres:
+{{
+  "action": "existing",
+  "folder_path": "/Onderwijs",
+  "confidence": 95,
+  "reasoning": "Certificaat van deelname / studentenverklaring; geen contract. Hoort in /Onderwijs.",
+  "suggested_filename": "certificaat_verklaring.pdf"
+}}
+
+Voorbeeld NIET-CONTRACT (onderwijs):
+{{
+  "action": "existing",
+  "folder_path": "/Onderwijs/Bedrijfskunde",
+  "confidence": 92,
+  "reasoning": "Onderwijsmateriaal bedrijfskunde; map bestaat al.",
+  "suggested_filename": "college_week3.pdf"
+}}
 
 JSON:"""
 
@@ -1327,6 +1429,9 @@ JSON:"""
 
             result['folder_path'] = folder_path
 
+            # FIX: niet-contracten NOOIT in /Onbekend_adres of /Contracten (AI negeert prompt soms)
+            result = _force_non_contract_out_of_contract_folders(result, filename)
+
             return result
 
         except json.JSONDecodeError as e:
@@ -1364,10 +1469,9 @@ JSON:"""
 # ============================================================================
 
 def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
-    """Organize a batch of unorganized PDFs"""
+    """Organize a batch of unorganized PDFs. Alleen KEY_1..KEY_21 (get_next_key per doc), nooit ANALYZE key."""
 
     dbx = clients['dbx_organize']
-    gemini = clients['gemini_organize']
     model = clients['model_organize']
 
     try:
@@ -1376,15 +1480,21 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
 
         result = dbx.files_list_folder(SCAN_ROOT if SCAN_ROOT else '', recursive=False)
 
+        seen_paths = set()  # genormaliseerde paden in deze ronde (voorkom dubbele in één batch)
         while True:
             for entry in result.entries:
                 if isinstance(entry, dropbox.files.FileMetadata):
                     if entry.name.lower().endswith('.pdf'):
                         path = entry.path_display
+                        norm = _normalize_dropbox_path(path)
 
-                        # Skip if already organized
-                        if path in organized_history:
+                        # Skip if already organized (genormaliseerd)
+                        if norm in organized_history:
                             continue
+                        # Skip als we dit bestand al in deze ronde hebben (geen dubbele verwerking)
+                        if norm in seen_paths:
+                            continue
+                        seen_paths.add(norm)
 
                         # Skip if in excluded folders
                         skip = False
@@ -1407,7 +1517,7 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
         if not unorganized:
             return 0
 
-        # Process batch
+        # Process batch (max_docs, geen duplicaten door seen_paths)
         batch = unorganized[:max_docs]
         print(f"\n📦 Processing batch of {len(batch)} document(s)")
 
@@ -1416,6 +1526,19 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                 print(f"\n{'='*70}")
                 print(f"📄 [{i}/{len(batch)}] {pdf_info['name']}")
                 print(f"{'='*70}")
+
+                # Altijd een van de 21 keys met < 15 calls/24u
+                api_key, key_idx = get_next_key() if get_next_key else (None, -1)
+                if api_key is None:
+                    logger.error("Geen key beschikbaar (alle 21 keys op 15/24u). Stop batch.")
+                    break
+                if get_state_summary and key_idx >= 0:
+                    summary = get_state_summary()
+                    if key_idx < len(summary):
+                        _, count, _ = summary[key_idx]
+                        n_keys = len(summary)
+                        print(f"🔑 Key {key_idx + 1}/{n_keys} ({count}/15 in 24u)")
+                gemini = genai.Client(api_key=api_key)
 
                 # Download
                 print(f"⬇️  Downloading...")
@@ -1450,16 +1573,11 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                 confidence = result['confidence']
                 reasoning = result['reasoning']
 
-                # Bestemming bestandsnaam bepalen (nodig voor huurcontract-map)
+                # Bestemming bestandsnaam: AI geeft folder_path + suggested_filename (geen override meer)
                 suggested = result.get('suggested_filename')
                 dest_name = FolderManager.sanitize_suggested_filename(suggested, "") if suggested else ""
                 if not dest_name:
                     dest_name = FolderManager.fallback_filename_from_folder(folder_path, pdf_info['name'])
-
-                # Hernoemde huurcontracten altijd in Contracten/Huurcontracten
-                if dest_name and "huurcontract" in dest_name.lower():
-                    if "Contracten" not in folder_path or "Huurcontracten" not in folder_path:
-                        folder_path = "/Contracten/Huurcontracten" + (folder_path if folder_path.startswith("/") else "/" + folder_path)
 
                 print(f"\n📊 AI DECISION:")
                 print(f"   Action: {action.upper()}")
@@ -2181,11 +2299,11 @@ Geef ALLEEN de samenvatting (geen introductie):"""
 # ============================================================================
 
 def process_rental_contract(clients, pdf_info):
-    """Process and analyze a rental contract"""
+    """Process and analyze a rental contract. Gebruikt ALTIJD GEMINI_API_KEY_ANALYZE (nooit de 21 organize-keys)."""
 
     dbx_analyze = clients['dbx_analyze']
     dbx_target = clients['dbx_target']
-    gemini = clients['gemini_analyze']
+    gemini = clients['gemini_analyze']   # alleen ANALYZE key, nooit KEY_1..21
     model = clients['model_analyze']
 
     # BELANGRIJK: Voeg direct toe aan history zodra processing start
