@@ -1,5 +1,22 @@
 # Supabase op localhost – checklist
 
+## Waarom niet gewoon één .env in de root?
+
+Next.js leest **alleen** `.env` uit de map waar de **Next-app** draait (waar `next.config` en `package.json` van die app staan). De **contracts-app** draait in `alexander/epc-architecture/`, dus Next kijkt daar naar `.env` en `.env.local` — **niet** naar de repo-root `.env`. Daarom lijkt het alsof je twee plekken moet bijhouden.
+
+**Oplossing: één .env, symlink in de contracts-app**
+
+Zo hoef je maar één bestand te onderhouden (de root `.env`):
+
+```bash
+# In de projectroot (map met alexander/)
+ln -sf ../../.env alexander/epc-architecture/.env.local
+```
+
+Daarna leest de contracts-app via `.env.local` gewoon de root `.env`. Wijzigingen doe je alleen in de root `.env`.
+
+---
+
 Als je "Missing Supabase env vars" ziet of Supabase werkt niet lokaal:
 
 ## 1. Juiste map

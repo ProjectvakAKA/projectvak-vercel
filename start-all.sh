@@ -16,6 +16,7 @@ echo ""
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$SCRIPT_DIR"
+# Root-kopie (geen auth/proxy): opent betrouwbaar. Alexander-werk staat in alexander/epc-architecture
 FRONTEND_DIR="$PROJECT_ROOT/epc-architecture"
 
 # Function to cleanup on exit
@@ -61,10 +62,9 @@ sleep 2
 # Start Next.js frontend
 echo -e "${GREEN}⚛️  Starting Next.js frontend...${NC}"
 cd "$FRONTEND_DIR"
-# Ensure we're in the right directory and Next.js doesn't look at parent
-# Set PWD explicitly to prevent Next.js from resolving parent package.json
 export PWD="$FRONTEND_DIR"
-# Run npm in a subshell to isolate the working directory
+# Onderdruk MallocStackLogging-meldingen van Node op macOS (harmloos)
+export MallocStackLogging=0 2>/dev/null || true
 (cd "$FRONTEND_DIR" && npm run dev) &
 NEXTJS_PID=$!
 echo -e "${GREEN}✓ Next.js frontend started (PID: $NEXTJS_PID)${NC}"
@@ -75,6 +75,7 @@ echo -e "${BLUE}║   System is running!                                  ║${N
 echo -e "${BLUE}║                                                       ║${NC}"
 echo -e "${BLUE}║   Python Backend:  Processing documents              ║${NC}"
 echo -e "${BLUE}║   Next.js Frontend: http://localhost:3000            ║${NC}"
+echo -e "${BLUE}║   (of 3001 als 3000 bezet is – kijk in de terminal)   ║${NC}"
 echo -e "${BLUE}║                                                       ║${NC}"
 echo -e "${BLUE}║   Press Ctrl+C to stop both processes                ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════╝${NC}"

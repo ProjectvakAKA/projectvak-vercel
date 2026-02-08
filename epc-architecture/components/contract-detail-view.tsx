@@ -156,13 +156,17 @@ const sectionLabels: Record<SectionKey, Record<string, string>> = {
 }
 
 function getContractStatus(contract: ContractData): DocumentStatus {
+  // Gepusht naar Whise heeft voorrang: altijd "pushed" tonen
+  if ((contract as any).whise_pushed === true) {
+    return 'pushed'
+  }
   // Check if contract was manually edited
   if ((contract as any).edited?.timestamp || (contract as any).manually_edited) {
     return 'manually_edited'
   }
   if (!contract.confidence) return 'pending'
   
-  // Only "pushed" if confidence >= 95 (fully processed and approved)
+  // Alleen "pushed" bij confidence >= 95 (volledig verwerkt en goedgekeurd)
   if (contract.confidence.score >= 95) return 'pushed'
   
   // Everything below 95% needs review (even if parsed, it needs manual check)
@@ -209,8 +213,8 @@ export type ContractDetailViewProps = {
   filename: string
   onBack: () => void
   embedded?: boolean
-  /** Wordt aangeroepen na succesvolle (dummy of echte) push naar Whise, o.a. voor lijst "Reeds manueel naar Whise gepusht" */
-  onPushedToWhise?: (filename: string) => void
+  /** Wordt aangeroepen na succesvolle (dummy of echte) push naar Whise; isManual = true bij handmatige push */
+  onPushedToWhise?: (filename: string, isManual?: boolean) => void
   /** Wordt aangeroepen na opslaan van wijzigingen, zodat lijst en detail op niveau 3 dezelfde status tonen */
   onContractUpdated?: (filename: string, payload: { manually_edited: boolean }) => void
 }
@@ -347,7 +351,7 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
             ? (autoPush ? 'Automatisch gepusht naar Whise' : 'Handmatig gepusht naar Whise')
             : (data.message || 'Gepusht naar Whise')
         })
-        onPushedToWhise?.(filename)
+        onPushedToWhise?.(filename, !autoPush)
         if (data.whiseId) {
           toast.success('Gepusht naar Whise', {
             description: `Contract "${contract.filename}" is succesvol naar Whise gepusht.`,
@@ -370,7 +374,7 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
           pushed: true,
           message: data.message || 'Gepusht naar Whise'
         })
-        onPushedToWhise?.(filename)
+        onPushedToWhise?.(filename, !autoPush)
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
@@ -495,7 +499,11 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
   const displayContract = isEditing && editedData ? editedData : contract
   const contractData = displayContract?.contract_data || {}
   const pand = contractData.pand || {}
-  const status = getContractStatus(displayContract || contract)
+  // Status voor badge: als lokaal net gepusht naar Whise, ook "pushed" tonen (ook op niveau 3)
+  const status: DocumentStatus =
+    whiseStatus?.pushed === true
+      ? 'pushed'
+      : getContractStatus(displayContract || contract)
   const confidenceScore = displayContract?.confidence?.score || contract?.confidence?.score || 0
 
   const sections: { key: SectionKey; label: string; icon: any }[] = [

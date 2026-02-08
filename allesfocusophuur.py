@@ -36,6 +36,15 @@ if not _env_loaded and _script_dir != os.path.abspath('.'):
     load_dotenv(os.path.join(os.path.dirname(_script_dir), '.env'))
 load_dotenv()  # cwd als fallback
 
+# 21-key rotator voor organize (KEY_1..KEY_21 in .env → telling in alexander/gemini_organize_key_state.json)
+_alexander_dir = os.path.join(_script_dir, 'alexander')
+if _alexander_dir not in __import__('sys').path:
+    __import__('sys').path.insert(0, _alexander_dir)
+try:
+    from gemini_key_rotator import get_next_key
+except ImportError:
+    get_next_key = None
+
 # ============================================================================
 # LOGGING SETUP
 # ============================================================================
@@ -66,6 +75,16 @@ APP_KEY_SOURCE_FULL = os.getenv('APP_KEY_SOURCE_FULL')
 APP_SECRET_SOURCE_FULL = os.getenv('APP_SECRET_SOURCE_FULL')
 REFRESH_TOKEN_SOURCE_FULL = os.getenv('REFRESH_TOKEN_SOURCE_FULL')
 GEMINI_API_KEY_ORGANIZE = os.getenv('GEMINI_API_KEY_ORGANIZE')
+
+
+def _first_organize_key():
+    """Eerste van de 21 keys voor init/model-listing (verbruikt geen rotator-slot). Alleen KEY_1..KEY_21."""
+    for i in range(1, 22):
+        k = os.getenv(f'GEMINI_API_KEY_{i}', '').strip()
+        if k:
+            return k
+    return None
+
 
 # FASE 2: ANALYSEER (Read-only SOURCE)
 APP_KEY_SOURCE_RO = os.getenv('APP_KEY_SOURCE_RO')
@@ -98,10 +117,10 @@ SCAN_ROOT = ''
 CHECK_INTERVAL = 20
 BATCH_SIZE = 5
 
-# History files
-ORGANIZED_HISTORY = "organized_history.txt"
-ANALYZED_HISTORY = "analyzed_docs.txt"
-FOLDER_CACHE = "folder_structure.json"
+# History files: vast pad (niet afhankelijk van cwd) zodat reload altijd hetzelfde bestand leest
+ORGANIZED_HISTORY = os.path.join(_script_dir, "organized_history.txt")
+ANALYZED_HISTORY = os.path.join(_script_dir, "analyzed_docs.txt")
+FOLDER_CACHE = os.path.join(_script_dir, "folder_structure.json")
 
 # CSV log in TARGET
 CSV_LOG_PATH = "/verwerking_log.csv"
@@ -749,10 +768,11 @@ def load_history(filename):
 
 
 def add_to_history(filename, path):
-    """Add file to history"""
+    """Add file to history. Flush direct zodat volgende load_history het ziet."""
     try:
         with open(filename, 'a', encoding='utf-8') as f:
-            f.write(f"{path}\n")
+            f.write(f"{path.strip()}\n")
+            f.flush()
     except Exception as e:
         print(f"⚠️  History update failed: {e}")
 
@@ -936,9 +956,13 @@ def init_clients():
         return None
     
     try:
-        # Gemini clients first - create clients (they'll fail when used if API key is invalid)
-        # This allows code to start and fail gracefully when actually using Gemini
-        client_organize = genai.Client(api_key=GEMINI_API_KEY_ORGANIZE)
+        # ORGANIZE: alleen KEY_1..KEY_21 (rotator in organize_batch). Init gebruikt eerste key alleen voor model-listing.
+        first_organize_key = _first_organize_key()
+        if not first_organize_key:
+            logger.error("Geen Gemini-organize key. Zet GEMINI_API_KEY_1 t/m GEMINI_API_KEY_21 in .env.")
+            return None
+        client_organize = genai.Client(api_key=first_organize_key)
+        # ANALYZE: alleen GEMINI_API_KEY_ANALYZE. Contractverwerking mag nooit de 21 organize-keys gebruiken.
         client_analyze = genai.Client(api_key=GEMINI_API_KEY_ANALYZE)
 
         # Try to dynamically select best available model, fallback to default if API key invalid
@@ -1195,6 +1219,47 @@ def extract_text_vision(images: List[bytes], gemini_client, model) -> str:
 # PHASE 1: SMART CLASSIFICATION
 # ============================================================================
 
+def _force_non_contract_out_of_contract_folders(result: dict, filename: str) -> dict:
+    """Zorg dat verhaal/essay/onderwijs/certificaat NOOIT in /Onbekend_adres komen (code-fix na AI)."""
+    folder_path = (result.get('folder_path') or '').strip()
+    reasoning = (result.get('reasoning') or '').lower()
+    suggested = (result.get('suggested_filename') or '').lower()
+    name_lower = filename.lower()
+
+    if 'onbekend_adres' not in folder_path.lower() and '/contracten/' not in folder_path.lower():
+        return result
+
+    non_contract_signals = [
+        'verhaal', 'essay', 'narratief', 'persoonlijke tekst', 'geen contract',
+        'onderwijs', 'college', 'cursus', 'dictaat', 'studie',
+        'certificaat', 'verklaring', 'deelname', 'studentenverklaring', 'bewijs',
+        'factuur', 'offerte', 'betalingsdocument', 'teksten', 'overig'
+    ]
+    if not any(s in reasoning or s in suggested or s in name_lower for s in non_contract_signals):
+        return result
+
+    if any(s in reasoning or s in suggested or s in name_lower for s in ['verhaal', 'essay', 'narratief', 'tekst']):
+        result['folder_path'] = '/Verhaal'
+        result['suggested_filename'] = 'verhaal_document.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: verhaal → /Verhaal.]'
+    elif any(s in reasoning or s in suggested or s in name_lower for s in ['certificaat', 'verklaring', 'deelname', 'studentenverklaring', 'bewijs']):
+        result['folder_path'] = '/Onderwijs'
+        result['suggested_filename'] = 'certificaat_verklaring.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: certificaat/verklaring → /Onderwijs.]'
+    elif any(s in reasoning or s in suggested or s in name_lower for s in ['onderwijs', 'college', 'cursus', 'dictaat']):
+        result['folder_path'] = '/Onderwijs'
+        result['suggested_filename'] = 'onderwijs_document.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: onderwijs → /Onderwijs.]'
+    elif any(s in reasoning or s in suggested or s in name_lower for s in ['factuur', 'offerte']):
+        result['folder_path'] = '/Facturen'
+        result['suggested_filename'] = 'factuur_document.pdf'
+    else:
+        result['folder_path'] = '/Verhaal'
+        result['suggested_filename'] = 'document.pdf'
+        result['reasoning'] = (result.get('reasoning') or '') + ' [Correctie: geen contract → /Verhaal.]'
+    return result
+
+
 def smart_classify(text: str, filename: str, current_location: str,
                    existing_folders: str, gemini_client, model, pdf_metadata: dict) -> Optional[Dict]:
     """AI decides folder structure with STRICT differentiation"""
@@ -1327,6 +1392,9 @@ JSON:"""
 
             result['folder_path'] = folder_path
 
+            # FIX: verhaal/certificaat/onderwijs NOOIT in /Onbekend_adres (AI negeert prompt soms)
+            result = _force_non_contract_out_of_contract_folders(result, filename)
+
             return result
 
         except json.JSONDecodeError as e:
@@ -1364,10 +1432,9 @@ JSON:"""
 # ============================================================================
 
 def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
-    """Organize a batch of unorganized PDFs"""
+    """Organize a batch of unorganized PDFs. Alleen KEY_1..KEY_21 (get_next_key per doc), nooit ANALYZE key."""
 
     dbx = clients['dbx_organize']
-    gemini = clients['gemini_organize']
     model = clients['model_organize']
 
     try:
@@ -1420,6 +1487,15 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                 # Download
                 print(f"⬇️  Downloading...")
                 _, response = dbx.files_download(pdf_info['path'])
+
+                # Altijd een van de 21 keys met < 15 calls/24u (één key per document)
+                api_key, key_idx = get_next_key() if get_next_key else (None, -1)
+                if api_key is None:
+                    logger.error("Geen key beschikbaar (alle 21 keys op 15/24u). Stop batch.")
+                    break
+                if key_idx >= 0:
+                    print(f"   🔑 Key {key_idx + 1}/21 (1 call voor dit document)")
+                gemini = genai.Client(api_key=api_key)
 
                 # Extract text
                 text, pdf_metadata = extract_text_with_ocr(response.content, gemini, model)
@@ -1497,7 +1573,13 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                     add_to_history(ORGANIZED_HISTORY, pdf_info['path'])
 
                 except dropbox.exceptions.ApiError as e:
-                    print(f"❌ Move error: {e}")
+                    err_str = str(e).lower()
+                    if 'not_found' in err_str or 'from_lookup' in err_str:
+                        print(f"❌ Bronbestand niet gevonden op Dropbox: {pdf_info['path']}")
+                        print(f"   (Bestand werd mogelijk al verplaatst of verwijderd. Overslaan.)")
+                        add_to_history(ORGANIZED_HISTORY, pdf_info['path'])  # niet opnieuw proberen
+                    else:
+                        print(f"❌ Move error: {e}")
                     continue
 
                 # Rate limiting between documents
@@ -2181,11 +2263,11 @@ Geef ALLEEN de samenvatting (geen introductie):"""
 # ============================================================================
 
 def process_rental_contract(clients, pdf_info):
-    """Process and analyze a rental contract"""
+    """Process and analyze a rental contract. Gebruikt ALTIJD GEMINI_API_KEY_ANALYZE (nooit de 21 organize-keys)."""
 
     dbx_analyze = clients['dbx_analyze']
     dbx_target = clients['dbx_target']
-    gemini = clients['gemini_analyze']
+    gemini = clients['gemini_analyze']   # alleen ANALYZE key, nooit KEY_1..21
     model = clients['model_analyze']
 
     # BELANGRIJK: Voeg direct toe aan history zodra processing start
@@ -2511,9 +2593,11 @@ Automated Document Processing System
 # ============================================================================
 
 def analyze_rental_contracts(clients, analyzed_history):
-    """Find and analyze all rental contracts"""
+    """Find and analyze all rental contracts. Laadt history altijd vers van disk (voorkomt dubbele verwerking)."""
 
     dbx_analyze = clients['dbx_analyze']
+    # Altijd verse history van disk, zodat net geanalyseerde contracten direct als "in history" tellen
+    analyzed_history = load_history(ANALYZED_HISTORY)
 
     print(f"\n{'='*70}")
     print(f"🔍 PHASE 2: ANALYZING RENTAL CONTRACTS")

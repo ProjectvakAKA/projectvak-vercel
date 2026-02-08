@@ -106,5 +106,35 @@
     "created": "2026-01-31T16:24:53.311267",
     "description": "Beukenhof 14B",
     "file_count": 1
+  },
+  "/Georganiseerd/Contracten/Huurcontracten/Meir_78_bus_3": {
+    "name": "Meir_78_bus_3",
+    "created": "2026-02-08T12:06:56.060409",
+    "description": "Meir 78 bus 3",
+    "file_count": 1
+  },
+  "/Georganiseerd/Onbekend_adres": {
+    "name": "Onbekend_adres",
+    "created": "2026-02-08T12:16:34.497548",
+    "description": "Document zonder specifiek adres",
+    "file_count": 9
+  },
+  "/Georganiseerd/Steenovendreef_2": {
+    "name": "Steenovendreef_2",
+    "created": "2026-02-08T12:33:17.795733",
+    "description": "Steenovendreef 2",
+    "file_count": 1
+  },
+  "/Georganiseerd/Verhaal": {
+    "name": "Verhaal",
+    "created": "2026-02-08T12:45:06.854096",
+    "description": "Auto-detected",
+    "file_count": 4
+  },
+  "/Georganiseerd/Contracten/Huurcontracten/Louizalaan_210_bus_5": {
+    "name": "Louizalaan_210_bus_5",
+    "created": "2026-02-08T13:07:19.363238",
+    "description": "Louizalaan 210 bus 5",
+    "file_count": 1
   }
 }

@@ -74,3 +74,6 @@ alexander/epc-architecture/.env*.local
 # Backup files
 *_backup.py
 *.zip
+
+# Gemini organize key rotation state (alexander)
+alexander/gemini_organize_key_state.json
