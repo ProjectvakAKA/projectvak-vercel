@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import { RefreshCw, Building2, FileText, Zap, Shield, MapPin, Droplets, Fuel, ArrowLeft, CheckCircle2, Search, AlertCircle, Clock, User, Euro, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { RefreshCw, Building2, FileText, Zap, Shield, MapPin, Droplets, Fuel, ArrowLeft, CheckCircle2, Search, AlertCircle, Clock, User, Euro, PanelLeftClose, PanelLeftOpen, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ContractFile, ContractsResponse } from '@/lib/types'
 import { logger } from '@/lib/logger'
@@ -129,6 +129,36 @@ function houseMatchesStatusFilter(contracts: ContractFile[], filter: StatusFilte
   return contracts.some((c) => effective(c) === filter)
 }
 
+// Geavanceerde filters: huis tonen als minstens één contract binnen datum- en prijsbereik valt
+function houseMatchesAdvancedFilters(contracts: ContractFile[], dateFrom: string, dateTo: string, priceMin: string, priceMax: string): boolean {
+  if (!dateFrom && !dateTo && !priceMin && !priceMax) return true
+  return contracts.some((c) => {
+    let matchesDate = true
+    if (dateFrom || dateTo) {
+      const contractDate = new Date(c.modified)
+      if (dateFrom) {
+        const fromDate = new Date(dateFrom)
+        fromDate.setHours(0, 0, 0, 0)
+        if (contractDate < fromDate) matchesDate = false
+      }
+      if (dateTo) {
+        const toDate = new Date(dateTo)
+        toDate.setHours(23, 59, 59, 999)
+        if (contractDate > toDate) matchesDate = false
+      }
+    }
+    let matchesPrice = true
+    if (priceMin || priceMax) {
+      const price = c.huurprijs ?? 0
+      const num = typeof price === 'number' ? price : Number(price)
+      const n = Number.isFinite(num) ? num : 0
+      if (priceMin && n < parseFloat(priceMin)) matchesPrice = false
+      if (priceMax && n > parseFloat(priceMax)) matchesPrice = false
+    }
+    return matchesDate && matchesPrice
+  })
+}
+
 export default function HuizenPage() {
   const pathname = usePathname()
   const [contracts, setContracts] = useState<ContractFile[]>([])
@@ -140,6 +170,11 @@ export default function HuizenPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState<SortOption>('label-asc')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
+  const [priceMin, setPriceMin] = useState<string>('')
+  const [priceMax, setPriceMax] = useState<string>('')
   const [pushedToWhiseDocNames, setPushedToWhiseDocNames] = useState<Set<string>>(() => new Set())
   const [manualPushDocNames, setManualPushDocNames] = useState<Set<string>>(() => new Set())
   const [level2HuizenCollapsed, setLevel2HuizenCollapsed] = useState(false)
@@ -293,7 +328,10 @@ export default function HuizenPage() {
 
   const filteredAndSortedHuizen = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    let list = huizenList.filter((h) => houseMatchesStatusFilter(h.contracts, statusFilter, pushedToWhiseDocNames))
+    let list = huizenList.filter((h) =>
+      houseMatchesStatusFilter(h.contracts, statusFilter, pushedToWhiseDocNames) &&
+      houseMatchesAdvancedFilters(h.contracts, dateFrom, dateTo, priceMin, priceMax)
+    )
     if (q) list = list.filter((h) =>
       h.label.toLowerCase().includes(q) ||
       h.key.toLowerCase().includes(q) ||
@@ -307,7 +345,7 @@ export default function HuizenPage() {
     else if (cmp === 'contracts-desc') list.sort((a, b) => b.contracts.length - a.contracts.length)
     else if (cmp === 'contracts-asc') list.sort((a, b) => a.contracts.length - b.contracts.length)
     return list
-  }, [huizenList, searchQuery, sortBy, statusFilter, pushedToWhiseDocNames])
+  }, [huizenList, searchQuery, sortBy, statusFilter, pushedToWhiseDocNames, dateFrom, dateTo, priceMin, priceMax])
 
   const selectedHuis = selectedHuisKey ? huizenList.find(h => h.key === selectedHuisKey) : null
   const categoryContracts = selectedHuis && selectedCategoryId
@@ -448,8 +486,8 @@ export default function HuizenPage() {
                           Overzicht per pand. Klik op een huis om de 10 documentcategorieën te bekijken en documenten te openen. Gebruik de filters om te zoeken of te sorteren.
                         </p>
                       </div>
-                      {(searchQuery.trim() || sortBy !== 'label-asc' || statusFilter !== 'all') && (
-                        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => { setSearchQuery(''); setSortBy('label-asc'); setStatusFilter('all') }}>
+                      {(searchQuery.trim() || sortBy !== 'label-asc' || statusFilter !== 'all' || dateFrom || dateTo || priceMin || priceMax) && (
+                        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => { setSearchQuery(''); setSortBy('label-asc'); setStatusFilter('all'); setDateFrom(''); setDateTo(''); setPriceMin(''); setPriceMax('') }}>
                           Filters wissen
                         </Button>
                       )}
@@ -457,8 +495,8 @@ export default function HuizenPage() {
                   ) : (
                     <>
                       <span className="text-xs font-medium text-muted-foreground">Huizen</span>
-                      {(searchQuery.trim() || sortBy !== 'label-asc' || statusFilter !== 'all') && (
-                        <Button variant="ghost" size="sm" className="ml-auto h-7 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setSearchQuery(''); setSortBy('label-asc'); setStatusFilter('all') }}>
+                      {(searchQuery.trim() || sortBy !== 'label-asc' || statusFilter !== 'all' || dateFrom || dateTo || priceMin || priceMax) && (
+                        <Button variant="ghost" size="sm" className="ml-auto h-7 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setSearchQuery(''); setSortBy('label-asc'); setStatusFilter('all'); setDateFrom(''); setDateTo(''); setPriceMin(''); setPriceMax('') }}>
                           Filters wissen
                         </Button>
                       )}
@@ -496,14 +534,77 @@ export default function HuizenPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                    className={cn('h-8 bg-secondary border-border', level === 2 && 'w-full justify-start text-xs')}
+                  >
+                    {showAdvancedFilters ? <ChevronUp className="h-4 w-4 mr-2 shrink-0" /> : <ChevronDown className="h-4 w-4 mr-2 shrink-0" />}
+                    Geavanceerde filters
+                  </Button>
+                  {(dateFrom || dateTo || priceMin || priceMax) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => { setDateFrom(''); setDateTo(''); setPriceMin(''); setPriceMax('') }}
+                      className={cn('h-8 text-muted-foreground', level === 2 && 'w-full justify-start text-xs')}
+                    >
+                      <X className="h-4 w-4 mr-2 shrink-0" />
+                      Geavanceerd wissen
+                    </Button>
+                  )}
                 </div>
+                {/* Geavanceerde filters: datum- en prijsbereik */}
+                {showAdvancedFilters && (
+                  <div className={cn('grid grid-cols-1 md:grid-cols-4 gap-3 p-4 bg-muted/50 rounded-lg border border-border', level === 1 ? 'mx-0 mt-3' : 'mx-2 mt-2')}>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Datum van</label>
+                      <Input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                        className={cn('bg-background', level === 2 && 'h-8 text-sm')}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Datum tot</label>
+                      <Input
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                        className={cn('bg-background', level === 2 && 'h-8 text-sm')}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Min. prijs (€)</label>
+                      <Input
+                        type="number"
+                        placeholder="0"
+                        value={priceMin}
+                        onChange={(e) => setPriceMin(e.target.value)}
+                        className={cn('bg-background', level === 2 && 'h-8 text-sm')}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Max. prijs (€)</label>
+                      <Input
+                        type="number"
+                        placeholder="∞"
+                        value={priceMax}
+                        onChange={(e) => setPriceMax(e.target.value)}
+                        className={cn('bg-background', level === 2 && 'h-8 text-sm')}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
               {/* Resultaat teller alleen op niv1 */}
               {level === 1 && !loading && (
                 <div className="px-6 py-2 border-b border-border">
                   <p className="text-sm text-muted-foreground">
                     {filteredAndSortedHuizen.length} van {huizenList.length} huizen
-                    {(searchQuery.trim() || statusFilter !== 'all') && ' (gefilterd)'}
+                    {(searchQuery.trim() || statusFilter !== 'all' || dateFrom || dateTo || priceMin || priceMax) && ' (gefilterd)'}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1 md:hidden">Scroll naar beneden voor de lijst met panden.</p>
                 </div>
@@ -518,7 +619,7 @@ export default function HuizenPage() {
                     <div className="p-4 text-muted-foreground text-sm">Laden...</div>
                   ) : filteredAndSortedHuizen.length === 0 ? (
                     <div className="p-4 text-muted-foreground text-sm">
-                      {searchQuery.trim() || statusFilter !== 'all' ? 'Geen huizen voor deze zoek- of filtercriteria.' : 'Geen huizen.'}
+                      {searchQuery.trim() || statusFilter !== 'all' || dateFrom || dateTo || priceMin || priceMax ? 'Geen huizen voor deze zoek- of filtercriteria.' : 'Geen huizen.'}
                     </div>
                   ) : level === 1 ? (
                     <div className="grid gap-4">
