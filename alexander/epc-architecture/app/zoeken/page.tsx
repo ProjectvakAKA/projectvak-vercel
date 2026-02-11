@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Search as SearchIcon, FileText, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+
+const DEBOUNCE_MS = 300
 
 type SearchResult = {
   id: string
@@ -20,34 +21,42 @@ export default function ZoekenPage() {
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [searched, setSearched] = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  async function handleSearch(e: React.FormEvent) {
-    e.preventDefault()
+  useEffect(() => {
     const q = query.trim()
-    if (!q || q.length < 2) {
-      setError('Voer minstens 2 tekens in.')
+    if (!q) {
+      setResults([])
+      setError(null)
+      setLoading(false)
       return
     }
-    setError(null)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
     setLoading(true)
-    setSearched(true)
-    try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data.error || 'Zoeken mislukt.')
+    setError(null)
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`)
+        const data = await res.json()
+        if (!res.ok) {
+          setError(data.error || 'Zoeken mislukt.')
+          setResults([])
+        } else {
+          setResults(data.results || [])
+          setError(null)
+        }
+      } catch (err: any) {
+        setError(err.message || 'Zoeken mislukt.')
         setResults([])
-        return
+      } finally {
+        setLoading(false)
       }
-      setResults(data.results || [])
-    } catch (err: any) {
-      setError(err.message || 'Zoeken mislukt.')
-      setResults([])
-    } finally {
-      setLoading(false)
+      debounceRef.current = null
+    }, DEBOUNCE_MS)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }
+  }, [query])
 
   return (
     <div className="flex flex-col h-full">
@@ -61,36 +70,30 @@ export default function ZoekenPage() {
               <div>
                 <h1 className="text-2xl font-bold text-foreground">Zoeken in documenten</h1>
                 <p className="text-sm text-muted-foreground">
-                  Zoek in de geëxtraheerde tekst van alle documenten (Supabase). Geen zoekactie in Dropbox.
+                  Resultaten verschijnen terwijl u typt. Zoek in de geëxtraheerde tekst (Supabase).
                 </p>
               </div>
             </div>
           </div>
 
-          <form onSubmit={handleSearch} className="flex gap-2 mb-6">
+          <div className="flex gap-2 mb-6">
             <div className="relative flex-1">
               <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
               <Input
                 type="search"
-                placeholder="Zoekterm (min. 2 tekens)..."
+                placeholder="Typ om te zoeken..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 className="pl-9 h-10 bg-background"
-                disabled={loading}
                 autoFocus
               />
-            </div>
-            <Button type="submit" disabled={loading} className="h-10">
-              {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <>
-                  <SearchIcon className="h-4 w-4 mr-2" />
-                  Zoeken
-                </>
+              {loading && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </span>
               )}
-            </Button>
-          </form>
+            </div>
+          </div>
 
           {error && (
             <div className="mb-6 p-4 rounded-lg bg-destructive/10 text-destructive text-sm">
@@ -98,7 +101,7 @@ export default function ZoekenPage() {
             </div>
           )}
 
-          {searched && !loading && (
+          {query.trim() && !loading && (
             <p className="text-sm text-muted-foreground mb-4">
               {results.length} resultaat{results.length !== 1 ? 'en' : ''} gevonden.
             </p>
@@ -131,9 +134,9 @@ export default function ZoekenPage() {
             ))}
           </div>
 
-          {searched && !loading && results.length === 0 && !error && (
+          {query.trim() && !loading && results.length === 0 && !error && (
             <p className="text-muted-foreground text-center py-8">
-              Geen documenten gevonden voor &quot;{query}&quot;. Probeer een andere zoekterm of controleer of de pipeline al documenten naar Supabase heeft geschreven.
+              Geen documenten gevonden voor &quot;{query.trim()}&quot;. Probeer een andere zoekterm of controleer of de pipeline al documenten naar Supabase heeft geschreven.
             </p>
           )}
         </div>

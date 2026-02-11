@@ -27,9 +27,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get('q')?.trim();
 
-  if (!q || q.length < 2) {
+  if (!q || q.length < 1) {
     return NextResponse.json(
-      { error: 'Geef minstens 2 tekens op (query parameter q).', results: [] },
+      { error: 'Geef minstens 1 teken op (query parameter q).', results: [] },
       { status: 400 }
     );
   }
