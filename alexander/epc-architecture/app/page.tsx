@@ -208,51 +208,50 @@ export default function HomePage() {
 
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <Link
-            href="/contracts"
-            className="bg-white rounded-lg shadow-sm p-8 border border-gray-200 hover:shadow-md transition group"
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                  Bekijk Alle Contracten
-                </h2>
-                <p className="text-gray-600 mb-4">
-                  Overzicht van alle geanalyseerde huurcontracten uit Dropbox TARGET
-                </p>
-                <div className="flex items-center text-blue-600 font-medium group-hover:gap-3 transition-all gap-2">
-                  <span>Ga naar overzicht</span>
-                  <ArrowRight className="w-5 h-5" />
+          {process.env.NEXT_PUBLIC_SCRIPT_ACTIVE === 'true' ? (
+            <Link
+              href="/huizen"
+              className="bg-white rounded-lg shadow-sm p-8 border border-gray-200 hover:shadow-md transition group"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                    Documenten per pand
+                  </h2>
+                  <p className="text-gray-600 mb-4">
+                    Overzicht per pand en de 10 documentcategorieën. Elk contract dat klaar is (1/10 is genoeg) wordt direct naar Whise gepusht — zonder te wachten op de rest.
+                  </p>
+                  <div className="flex items-center text-blue-600 font-medium group-hover:gap-3 transition-all gap-2">
+                    <span>Ga naar documenten</span>
+                    <ArrowRight className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="p-4 bg-green-100 rounded-lg">
+                  <Building2 className="w-8 h-8 text-green-600" />
                 </div>
               </div>
-              <div className="p-4 bg-blue-100 rounded-lg">
-                <Database className="w-8 h-8 text-blue-600" />
-              </div>
-            </div>
-          </Link>
-
-          <Link
-            href="/huizen"
-            className="bg-white rounded-lg shadow-sm p-8 border border-gray-200 hover:shadow-md transition group"
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                  Huizen per pand
-                </h2>
-                <p className="text-gray-600 mb-4">
-                  Overzicht per pand en de 10 documentcategorieën. Elk contract dat klaar is (1/10 is genoeg) wordt direct naar Whise gepusht — zonder te wachten op de rest.
-                </p>
-                <div className="flex items-center text-blue-600 font-medium group-hover:gap-3 transition-all gap-2">
-                  <span>Ga naar huizen</span>
-                  <ArrowRight className="w-5 h-5" />
+            </Link>
+          ) : (
+            <div className="bg-white rounded-lg shadow-sm p-8 border border-gray-200 opacity-75">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-2">
+                    Documenten per pand
+                  </h2>
+                  <p className="text-gray-600 mb-4">
+                    Overzicht per pand en documentcategorieën. Actief zodra het verwerkingsscript draait.
+                  </p>
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <div className="w-3 h-3 bg-amber-500 rounded-full" />
+                    <span className="text-sm font-medium">Niet actief</span>
+                  </div>
+                </div>
+                <div className="p-4 bg-gray-100 rounded-lg">
+                  <Building2 className="w-8 h-8 text-gray-400" />
                 </div>
               </div>
-              <div className="p-4 bg-green-100 rounded-lg">
-                <Building2 className="w-8 h-8 text-green-600" />
-              </div>
             </div>
-          </Link>
+          )}
 
           <div className="bg-white rounded-lg shadow-sm p-8 border border-gray-200">
             <div className="flex items-center justify-between">
@@ -264,12 +263,21 @@ export default function HomePage() {
                   Python backend verwerkt documenten en slaat JSON op in Dropbox TARGET
                 </p>
                 <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-                  <span className="text-sm text-gray-600">Actief</span>
+                  {process.env.NEXT_PUBLIC_SCRIPT_ACTIVE === 'true' ? (
+                    <>
+                      <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                      <span className="text-sm text-gray-600">Actief</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-3 h-3 bg-amber-500 rounded-full" />
+                      <span className="text-sm text-gray-600">Niet actief</span>
+                    </>
+                  )}
                 </div>
               </div>
-              <div className="p-4 bg-green-100 rounded-lg">
-                <TrendingUp className="w-8 h-8 text-green-600" />
+              <div className={cn('p-4 rounded-lg', process.env.NEXT_PUBLIC_SCRIPT_ACTIVE === 'true' ? 'bg-green-100' : 'bg-gray-100')}>
+                <TrendingUp className={cn('w-8 h-8', process.env.NEXT_PUBLIC_SCRIPT_ACTIVE === 'true' ? 'text-green-600' : 'text-gray-400')} />
               </div>
             </div>
           </div>
@@ -303,7 +311,7 @@ export default function HomePage() {
               </div>
               <h3 className="font-semibold text-gray-900 mb-2">Frontend & Huizen</h3>
               <p className="text-gray-600 text-sm">
-                De site toont contracten per pand en de 10 documentcategorieën. Zoek, filter en sorteer op huizen.
+                De site toont documenten per pand en de 10 documentcategorieën. Zoek, filter en sorteer op pand.
               </p>
             </div>
             <div>
