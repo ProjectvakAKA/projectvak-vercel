@@ -7,12 +7,13 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Home, ChevronLeft, Building2, Menu } from "lucide-react"
+import { Home, ChevronLeft, Building2, Menu, Search } from "lucide-react"
 import { SidebarContext } from "@/components/sidebar-context"
 
 const navigation = [
   { name: "Home", href: "/", icon: Home },
   { name: "Huizen", href: "/huizen", icon: Building2 },
+  { name: "Zoeken", href: "/zoeken", icon: Search },
 ]
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {

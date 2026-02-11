@@ -124,7 +124,7 @@ call to action: alle gemini keys inbrengen/vision uitdenken/ ai voor fallback/ a
 
 ---
 
-## Zoekfeature met frontend op Vercel + documenten in Dropbox (wat nodig is, hoe het werkt)
+## Zoekfeature met frontend op Vercel + documenten in Dropbox (wat nodig is, hoe het werkt) — ✅ geïmplementeerd
 
 **Haalbaar:** Ja, maar zoeken doen we **niet** in Dropbox. Dropbox is alleen bestandsopslag; er is geen full-text search door bestands*inhoud*. Als Dropbox niet geschikt is voor zoeken, doen we het dus niet met Dropbox.
 
