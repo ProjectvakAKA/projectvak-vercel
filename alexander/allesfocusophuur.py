@@ -154,7 +154,8 @@ RENTAL_KEYWORDS = [
 # TEXT EXTRACTION CONSTANTS
 # ============================================================================
 
-TEXT_SAMPLE_SIZE = 3500  # Characters for classification
+TEXT_SAMPLE_SIZE = 3500  # Characters for classification (legacy)
+ORGANIZE_AND_SUMMARY_TEXT_SIZE = 45000  # Full doc text for 1 call: classify + summary (Plan: stap 1+6)
 TEXT_CHUNK_1_SIZE = 20000  # First chunk for extraction
 TEXT_CHUNK_2_SIZE = 35000  # Second chunk for extraction
 TEXT_CHUNK_OVERLAP = 15000  # Overlap between chunks
@@ -900,6 +901,21 @@ def supabase_update_contract_data(supabase_config, json_name, json_data):
     return r
 
 
+def supabase_upsert_document_text(supabase_config, dropbox_path: str, name: str, full_text: str):
+    """Stap 7: geëxtraheerde tekst opslaan voor full-text zoeken (document_texts)."""
+    import requests
+    url = supabase_config["url"]
+    r = requests.post(
+        f"{url}/rest/v1/document_texts",
+        headers=_supabase_headers(supabase_config),
+        json={"dropbox_path": dropbox_path, "name": name, "full_text": full_text[:500000] if full_text else ""},
+        timeout=30,
+    )
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Supabase document_texts upsert failed: {r.status_code} {r.text[:200]}")
+    return r
+
+
 # ============================================================================
 # CSV LOGGING
 # ============================================================================
@@ -1087,8 +1103,73 @@ def init_clients():
 
 
 # ============================================================================
-# PDF TEXT EXTRACTION WITH OCR
+# STAP 8: MONITORING (pipeline stats)
 # ============================================================================
+_pipeline_stats = {
+    "text_layer": 0,
+    "ocr_google_vision": 0,
+    "ocr_vision": 0,  # Gemini Vision fallback
+    "contract_stages_rules": 0,
+    "contract_stages_ai": 0,
+}
+
+
+def record_extraction_method(method: str):
+    """Stap 8: registreer tekstbron (text_layer, ocr_tesseract, ocr_vision)."""
+    if method in _pipeline_stats:
+        _pipeline_stats[method] += 1
+
+
+def record_contract_stages(rules_count: int, ai_count: int):
+    """Stap 8: registreer aantal stages via regels vs AI."""
+    _pipeline_stats["contract_stages_rules"] += rules_count
+    _pipeline_stats["contract_stages_ai"] += ai_count
+
+
+def print_pipeline_stats():
+    """Stap 8: toon % documenten via regels / AI / OCR-fallback."""
+    total_docs = _pipeline_stats["text_layer"] + _pipeline_stats["ocr_google_vision"] + _pipeline_stats["ocr_vision"]
+    if total_docs == 0:
+        return
+    print("\n📊 Pipeline stats (deze run)")
+    print(f"   Tekst: {_pipeline_stats['text_layer']} tekstlaag, {_pipeline_stats['ocr_google_vision']} Google Vision, {_pipeline_stats['ocr_vision']} Gemini Vision (fallback)")
+    total_stages = _pipeline_stats["contract_stages_rules"] + _pipeline_stats["contract_stages_ai"]
+    if total_stages:
+        pct_rules = 100 * _pipeline_stats["contract_stages_rules"] / total_stages
+        print(f"   Contractvelden: {_pipeline_stats['contract_stages_rules']} via regels, {_pipeline_stats['contract_stages_ai']} via AI ({pct_rules:.0f}% regels)")
+
+
+# ============================================================================
+# PDF TEXT EXTRACTION WITH OCR (Stap 2: pdfplumber → Google Vision → Gemini Vision fallback)
+# ============================================================================
+
+def extract_text_google_vision(image_data: List[bytes], api_key: str) -> str:
+    """OCR met Google Cloud Vision API (DOCUMENT_TEXT_DETECTION). Key in .env: GOOGLE_VISION_API_KEY."""
+    if not api_key or not api_key.strip() or not image_data:
+        return ""
+    import urllib.request
+    requests_list = []
+    for img_bytes in image_data:
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+        requests_list.append({
+            "image": {"content": b64},
+            "features": [{"type": "DOCUMENT_TEXT_DETECTION"}]
+        })
+    try:
+        url = "https://vision.googleapis.com/v1/images:annotate?key=" + api_key.strip()
+        body = json.dumps({"requests": requests_list}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+        out = []
+        for r in data.get("responses", []):
+            if "fullTextAnnotation" in r and r["fullTextAnnotation"].get("text"):
+                out.append(r["fullTextAnnotation"]["text"])
+        return "\n\n".join(out) if out else ""
+    except Exception as e:
+        logger.warning(f"   Google Vision error: {e}")
+        return ""
+
 
 def extract_text_with_ocr(pdf_bytes: bytes, gemini_client, model: str, 
                           initial_pages: int = INITIAL_PAGES_TO_SCAN) -> Tuple[str, dict]:
@@ -1139,13 +1220,25 @@ def extract_text_with_ocr(pdf_bytes: bytes, gemini_client, model: str,
 
                 logger.info(f"   🔍 Running OCR on {len(image_data)} page(s)...")
 
-                ocr_text = extract_text_vision(image_data, gemini_client, model)
-
-                if ocr_text and len(ocr_text) > 100:
-                    cleaned_text = ocr_text
-                    logger.info(f"   ✓ OCR successful: {len(cleaned_text)} characters")
-                else:
-                    logger.warning(f"   ⚠️  OCR yielded little text")
+                # Stap 2: eerst Google Vision (aparte key); zo niet gezet of fout → Gemini Vision fallback
+                ocr_text = ""
+                google_vision_key = os.getenv("GOOGLE_VISION_API_KEY", "").strip()
+                if google_vision_key:
+                    ocr_text = extract_text_google_vision(image_data, google_vision_key)
+                    if ocr_text and len(ocr_text) > 100:
+                        cleaned_text = ocr_text
+                        extraction_method = "ocr_google_vision"
+                        logger.info(f"   ✓ Google Vision OCR: {len(cleaned_text)} chars")
+                    else:
+                        ocr_text = ""
+                if not ocr_text and gemini_client and model:
+                    ocr_text = extract_text_vision(image_data, gemini_client, model)
+                    if ocr_text and len(ocr_text) > 100:
+                        cleaned_text = ocr_text
+                        extraction_method = "ocr_vision"
+                        logger.info(f"   ✓ Gemini Vision OCR (fallback): {len(cleaned_text)} chars")
+                    else:
+                        logger.warning(f"   ⚠️  OCR yielded little text")
 
             except Exception as ocr_error:
                 logger.error(f"   ❌ OCR error: {ocr_error}", exc_info=True)
@@ -1184,9 +1277,9 @@ def extract_text_with_ocr(pdf_bytes: bytes, gemini_client, model: str,
             'total_pages': total_pages,
             'pages_scanned': pages_scanned,
             'text_length': len(cleaned_text),
-            'extraction_method': extraction_method
+            'extraction_method': extraction_method,
+            'ocr_engine': extraction_method if extraction_method in ("ocr_google_vision", "ocr_vision") else "text_layer",
         }
-
         return cleaned_text, metadata
 
     except Exception as e:
@@ -1281,14 +1374,19 @@ def _force_non_contract_out_of_contract_folders(result: dict, filename: str) -> 
 
 def smart_classify(text: str, filename: str, current_location: str,
                    existing_folders: str, gemini_client, model, pdf_metadata: dict) -> Optional[Dict]:
-    """AI classificeert documenten: contracten → type-map + submap adres; overige → inhoud-map (Verhaal, EPC, etc.)."""
+    """Eén call: document volledig inlezen, korte samenvatting maken (Plan stap 6) + classificatie/ordening (Plan stap 1). Output gebruikt voor Dropbox-ordenen."""
 
-    text_sample = text[:TEXT_SAMPLE_SIZE] if len(text) > TEXT_SAMPLE_SIZE else text
+    # Meer tekst meegeven zodat de model het document kan samenvatten (stap 1+6 in één call)
+    text_for_call = text[:ORGANIZE_AND_SUMMARY_TEXT_SIZE] if len(text) > ORGANIZE_AND_SUMMARY_TEXT_SIZE else text
+    if len(text) > ORGANIZE_AND_SUMMARY_TEXT_SIZE:
+        text_for_call += "\n\n[... document afgekapt voor lengte ...]"
 
     extraction_method = pdf_metadata.get('extraction_method', 'text')
     method_note = " (OCR used)" if extraction_method == "ocr" else ""
 
-    prompt = f"""SYSTEM: Je bent een EXPERT documentclassificeerder. Je bepaalt EERST het type document, DAARNA de mapstructuur.
+    prompt = f"""SYSTEM: Je bent een EXPERT documentclassificeerder. Je doet TWEE dingen in één antwoord:
+1) LEES het document en maak een KORTE samenvatting (max 3-4 zinnen; voor metadata).
+2) BEPAAL het type document en de mapstructuur (waar het in Dropbox moet).
 
 CRITICAL: /Onbekend_adres is ALLEEN voor CONTRACTEN (huur, EPC, eigendomstitel, …) waar het adres niet uit de tekst komt. Verhalen, essays, onderwijs, facturen → NOOIT /Onbekend_adres. Verhaal/essay/narratief → ALTIJD /Verhaal.
 
@@ -1299,8 +1397,8 @@ EXTRACTION: {pdf_metadata.get('pages_scanned', '?')}/{pdf_metadata.get('total_pa
 EXISTING FOLDERS (bestaande mappen; kijk of jouw folder_path hier al in voorkomt → action "existing", anders "new"):
 {existing_folders if existing_folders else "Geen mappen nog - eerste document."}
 
-DOCUMENT TEXT:
-{text_sample}
+DOCUMENT TEKST (volledig inlezen voor samenvatting; gebruik ook voor classificatie):
+{text_for_call}
 
 ═══════════════════════════════════════════════════════════════════
 REGELS
@@ -1335,9 +1433,10 @@ REGELS
    - "existing" = folder_path staat al in EXISTING FOLDERS (zelfde pad gebruiken).
    - "new" = folder_path bestaat nog niet, wordt aangemaakt.
 
-VERPLICHT: Geef ALTIJD action, folder_path, confidence (0-100), reasoning, suggested_filename.
+VERPLICHT: Geef ALTIJD action, folder_path, confidence (0-100), reasoning, suggested_filename, EN summary.
 - folder_path altijd met leading slash, delen gescheiden door /, geen spaties in mapnamen (gebruik underscore).
 - suggested_filename: alleen letters, cijfers, underscores; eindig op .pdf.
+- summary: korte samenvatting van het document (max 3-4 zinnen), gebaseerd op de volledige tekst hierboven.
 
 ANTWOORD FORMAT (ALLEEN JSON, geen tekst ervoor/erna):
 
@@ -1347,7 +1446,8 @@ Voorbeeld CONTRACT (huurcontract Kerkstraat 10, map bestaat al):
   "folder_path": "/Contracten/Huurcontracten/Kerkstraat_10",
   "confidence": 95,
   "reasoning": "Huurcontract voor Kerkstraat 10; map /Contracten/Huurcontracten/Kerkstraat_10 bestaat al.",
-  "suggested_filename": "Kerkstraat_10_huurcontract.pdf"
+  "suggested_filename": "Kerkstraat_10_huurcontract.pdf",
+  "summary": "Huurcontract tussen verhuurder X en huurder Y voor Kerkstraat 10. Looptijd 3 jaar, huurprijs 850 euro. Waarborg twee maanden."
 }}
 
 Voorbeeld CONTRACT (EPC Meir 78 bus 3, nieuwe map):
@@ -1356,7 +1456,8 @@ Voorbeeld CONTRACT (EPC Meir 78 bus 3, nieuwe map):
   "folder_path": "/Contracten/EPC/Meir_78_bus_3",
   "confidence": 98,
   "reasoning": "Energieprestatiecertificaat voor Meir 78 bus 3; map bestaat nog niet.",
-  "suggested_filename": "Meir_78_bus_3_EPC.pdf"
+  "suggested_filename": "Meir_78_bus_3_EPC.pdf",
+  "summary": "EPC voor Meir 78 bus 3. Energielabel C. Bewoonbare oppervlakte 95 m². Geldig tot 2030."
 }}
 
 Voorbeeld NIET-CONTRACT (verhaal) — ALTIJD /Verhaal, NOOIT /Onbekend_adres:
@@ -1365,7 +1466,8 @@ Voorbeeld NIET-CONTRACT (verhaal) — ALTIJD /Verhaal, NOOIT /Onbekend_adres:
   "folder_path": "/Verhaal",
   "confidence": 90,
   "reasoning": "Verhaal/essay/narratief, geen contract; hoort in map Verhaal. Onbekend_adres is alleen voor contracten zonder adres.",
-  "suggested_filename": "verhaal_document.pdf"
+  "suggested_filename": "verhaal_document.pdf",
+  "summary": "Persoonlijk verhaal over een reis. Geen contract of officieel document."
 }}
 FOUT: verhaal of certificaat in /Onbekend_adres plaatsen. Onbekend_adres = ALLEEN voor contracten (huur, EPC, …) waar het adres ontbreekt.
 
@@ -1375,7 +1477,8 @@ Voorbeeld NIET-CONTRACT (certificaat/verklaring) — ALTIJD /Onderwijs, NOOIT /O
   "folder_path": "/Onderwijs",
   "confidence": 95,
   "reasoning": "Certificaat van deelname / studentenverklaring; geen contract. Hoort in /Onderwijs.",
-  "suggested_filename": "certificaat_verklaring.pdf"
+  "suggested_filename": "certificaat_verklaring.pdf",
+  "summary": "Certificaat van deelname aan een cursus. Geen contract."
 }}
 
 Voorbeeld NIET-CONTRACT (onderwijs):
@@ -1384,7 +1487,8 @@ Voorbeeld NIET-CONTRACT (onderwijs):
   "folder_path": "/Onderwijs/Bedrijfskunde",
   "confidence": 92,
   "reasoning": "Onderwijsmateriaal bedrijfskunde; map bestaat al.",
-  "suggested_filename": "college_week3.pdf"
+  "suggested_filename": "college_week3.pdf",
+  "summary": "College-notities bedrijfskunde week 3. Geen contract."
 }}
 
 JSON:"""
@@ -1421,6 +1525,9 @@ JSON:"""
 
             if result['action'] not in ['existing', 'new']:
                 raise ValueError(f"Invalid action: {result['action']}")
+
+            # Samenvatting (Plan stap 6 in dezelfde call)
+            result['summary'] = (result.get('summary') or '').strip() if isinstance(result.get('summary'), str) else ''
 
             # Clean folder path
             folder_path = result['folder_path'].strip()
@@ -1554,6 +1661,7 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
 
                 extraction_info = f"{pdf_metadata.get('extraction_method', 'text').upper()}"
                 print(f"✓ Text: {len(text)} chars via {extraction_info}")
+                record_extraction_method(pdf_metadata.get("ocr_engine", "text_layer"))
 
                 # Scan folders
                 folder_mgr.scan_organized_folders()
@@ -1584,6 +1692,8 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                 print(f"   Folder: {folder_path}")
                 print(f"   Confidence: {confidence}%")
                 print(f"   Reason: {reasoning}")
+                if result.get('summary'):
+                    print(f"   Summary: {result['summary'][:120]}{'…' if len(result.get('summary', '')) > 120 else ''}")
 
                 # Create new folder if needed
                 if action == "new":
@@ -1613,6 +1723,41 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
 
                     # Add to history
                     add_to_history(ORGANIZED_HISTORY, pdf_info['path'])
+
+                    # Plan stap 1+6: samenvatting uit dezelfde call opslaan in Dropbox (zelfde map als het document)
+                    summary_text = result.get('summary') or ''
+                    if summary_text:
+                        dest_stem = dest_name.rsplit('.', 1)[0] if '.' in dest_name else dest_name
+                        summary_path = f"{full_folder_path}/{dest_stem}_summary.json"
+                        metadata = {
+                            'summary': summary_text,
+                            'classification': {
+                                'action': action,
+                                'folder_path': folder_path,
+                                'confidence': confidence,
+                                'reasoning': reasoning,
+                                'suggested_filename': result.get('suggested_filename'),
+                            },
+                            'timestamp': datetime.utcnow().isoformat() + 'Z',
+                            'source_file': pdf_info['name'],
+                        }
+                        try:
+                            dbx.files_upload(
+                                json.dumps(metadata, ensure_ascii=False, indent=2).encode('utf-8'),
+                                summary_path,
+                                mode=dropbox.files.WriteMode.overwrite,
+                            )
+                            print(f"   📄 Samenvatting opgeslagen: {dest_stem}_summary.json")
+                        except Exception as up_err:
+                            logger.warning(f"Summary upload failed: {up_err}")
+
+                    # Stap 7: geëxtraheerde tekst in Supabase voor zoekfeature
+                    supabase_config = clients.get('supabase')
+                    if supabase_config and text:
+                        try:
+                            supabase_upsert_document_text(supabase_config, new_path, dest_name, text)
+                        except Exception as doc_err:
+                            logger.warning(f"document_texts save failed: {doc_err}")
 
                 except dropbox.exceptions.ApiError as e:
                     print(f"❌ Move error: {e}")
@@ -1707,20 +1852,85 @@ def find_pdfs_in_folders(dbx, folders):
 
 
 # ============================================================================
-# PHASE 2: CONTRACT DATA EXTRACTION
+# PHASE 2: CONTRACT DATA EXTRACTION (Stap 4+5: regels eerst, dan AI voor ontbrekende velden)
 # ============================================================================
 
-def extract_contract_data(full_text, gemini_client, model):
+def try_regex_contract_fields(full_text: str) -> Dict[str, dict]:
     """
-    Super accurate multi-stage huurcontract extractor.
-    Haalt ALLE data eruit die in het contract staat.
+    Stap 4: vaste velden via regels/regex. Alles wat hier uit komt hoeft geen Gemini-call.
+    Returns dict stage_name -> { field: value } voor zover gevonden.
     """
+    out = {}
+    if not full_text or len(full_text) < 50:
+        return out
+    text = full_text.replace("\n", " ")
+
+    # Huurprijs: € 1150 / 1150 euro / 1150,00 EUR
+    m = re.search(r"(?:€|euro|eur)\s*:?\s*(\d+(?:[.,]\d+)?)|(\d+(?:[.,]\d+)?)\s*(?:€|euro|eur)", text, re.I)
+    if m:
+        raw = (m.group(1) or m.group(2) or "").replace(",", ".")
+        try:
+            out.setdefault("financieel", {})["huurprijs"] = float(raw)
+        except ValueError:
+            pass
+    if not out.get("financieel") and re.search(r"maandhuur\s*[:\s]*(\d+(?:[.,]\d+)?)", text, re.I):
+        m = re.search(r"maandhuur\s*[:\s]*(\d+(?:[.,]\d+)?)", text, re.I)
+        if m:
+            try:
+                out.setdefault("financieel", {})["huurprijs"] = float(m.group(1).replace(",", "."))
+            except ValueError:
+                pass
+
+    # Ingangsdatum: 01/05/2025, 2025-05-01, 1 mei 2025
+    for pat in [
+        r"(?:ingangsdatum|aanvang|start)\s*[:\s]*(\d{4}-\d{2}-\d{2})",
+        r"(\d{4}-\d{2}-\d{2})",
+        r"(\d{1,2})/(\d{1,2})/(\d{4})",
+        r"(\d{1,2})\s+(?:januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december)\s+(\d{4})",
+    ]:
+        m = re.search(pat, text, re.I)
+        if m:
+            g = m.groups()
+            if len(g) == 1 and len(g[0]) == 10:
+                out.setdefault("periodes", {})["ingangsdatum"] = g[0]
+                break
+            if len(g) == 3 and len(g[2]) == 4:
+                try:
+                    y, mth, d = int(g[2]), int(g[1]) if g[1].isdigit() else 0, int(g[0])
+                    if 1 <= mth <= 12 and 1 <= d <= 31:
+                        out.setdefault("periodes", {})["ingangsdatum"] = f"{y}-{mth:02d}-{d:02d}"
+                except (ValueError, TypeError):
+                    pass
+                break
+
+    # Adres pand: Straatnaam 123 (bus X), postcode Stad
+    addr = re.search(
+        r"(?:gelegen te|adres|adres van het goed)\s*[:\s]*([A-Za-zÀ-ÿ\s\-]+?\d+[A-Za-z]?(?:\s*bus\s*\d+)?(?:\s*,?\s*\d{4}\s+[A-Za-zÀ-ÿ\s\-]+)?)",
+        text,
+        re.I,
+    )
+    if addr:
+        adr = addr.group(1).strip()
+        if len(adr) > 5 and len(adr) < 200:
+            out.setdefault("pand", {})["adres"] = adr[:150]
+
+    return out
+
+
+def extract_contract_data(full_text, gemini_client, model, initial_data: Optional[Dict[str, dict]] = None):
+    """
+    Multi-stage huurcontract extractor. Stap 4+5: eerst regels (initial_data), dan AI voor ontbrekende secties.
+    """
+    if initial_data is None:
+        initial_data = try_regex_contract_fields(full_text)
+        if initial_data:
+            print(f"   📐 Regels/regex: {list(initial_data.keys())} (minder API-calls)")
 
     # Split text in chunks voor betere extractie
     text_chunk_1 = full_text[:TEXT_CHUNK_1_SIZE]
     text_chunk_2 = full_text[TEXT_CHUNK_OVERLAP:TEXT_CHUNK_2_SIZE] if len(full_text) > TEXT_CHUNK_OVERLAP else ""
 
-    print("   🎯 Starting DEEP extraction (multi-stage)...")
+    print("   🎯 Starting extraction (regels + AI voor ontbrekende velden)...")
 
     extracted_sections = {}
 
@@ -2003,6 +2213,10 @@ ALLEEN JSON:"""
 
     for stage_name, prompt in stages.items():
         print(f"      📊 Extracting {stage_name}...")
+        if stage_name in initial_data and initial_data[stage_name]:
+            extracted_sections[stage_name] = initial_data[stage_name]
+            print(f"         ✓ from regels (geen API-call)")
+            continue
 
         for attempt in range(3):
             try:
@@ -2062,9 +2276,8 @@ ALLEEN JSON:"""
         # 7 stages per contract, dus min 12s tussen elke stage
         time.sleep(12)  # Na elke stage - respecteert 5 RPM limiet
 
-
-    # 3. Verlaag batch size
-    BATCH_SIZE = 3  # Was 5, nu 3 per cycle
+    rules_count = sum(1 for sn in stages if initial_data.get(sn))
+    record_contract_stages(rules_count, len(stages) - rules_count)
 
     # ========================================================================
     # MERGE ALL STAGES
@@ -2326,6 +2539,7 @@ def process_rental_contract(clients, pdf_info):
         print(f"📖 Extracting text...")
         full_text, pdf_metadata = extract_text_with_ocr(response.content, gemini, model)
         print(f"✓ Text: {len(full_text)} chars")
+        record_extraction_method(pdf_metadata.get("ocr_engine", "text_layer"))
 
         if len(full_text.strip()) < 50:
             print(f"⚠️  Too little text - skipping")
@@ -2407,6 +2621,13 @@ def process_rental_contract(clients, pdf_info):
         json_name = f"data_{base}_{ts}.json"
         json_file = f"/{json_name}"
         supabase_config = clients.get('supabase')
+
+        # Stap 7: geëxtraheerde tekst in Supabase voor zoekfeature
+        if supabase_config and full_text:
+            try:
+                supabase_upsert_document_text(supabase_config, pdf_info['path'], pdf_info['name'], full_text)
+            except Exception as doc_err:
+                logger.warning(f"document_texts save failed: {doc_err}")
 
         # JSON opslaan: alleen Supabase (via REST API)
         print(f"💾 Saving JSON to Supabase...")
@@ -2807,6 +3028,7 @@ def main():
                     print(f"\n[{ts}] ✅ All organized & analyzed - waiting for new documents...",
                           end='\r', flush=True)
 
+            print_pipeline_stats()
             # Wait before next cycle
             time.sleep(CHECK_INTERVAL)
 

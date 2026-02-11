@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import { RefreshCw, Building2, FileText, Zap, Shield, MapPin, Droplets, Fuel, ArrowLeft, CheckCircle2, Search, AlertCircle, Clock, User, Euro, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { RefreshCw, Building2, FileText, Zap, Shield, MapPin, Droplets, Fuel, ArrowLeft, CheckCircle2, Search, AlertCircle, Clock, User, Euro, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ContractFile, ContractsResponse } from '@/lib/types'
 import { logger } from '@/lib/logger'
@@ -129,6 +129,36 @@ function houseMatchesStatusFilter(contracts: ContractFile[], filter: StatusFilte
   return contracts.some((c) => effective(c) === filter)
 }
 
+// Geavanceerde filters: huis tonen als minstens één contract binnen datum- en prijsbereik valt
+function houseMatchesAdvancedFilters(contracts: ContractFile[], dateFrom: string, dateTo: string, priceMin: string, priceMax: string): boolean {
+  if (!dateFrom && !dateTo && !priceMin && !priceMax) return true
+  return contracts.some((c) => {
+    let matchesDate = true
+    if (dateFrom || dateTo) {
+      const contractDate = new Date(c.modified)
+      if (dateFrom) {
+        const fromDate = new Date(dateFrom)
+        fromDate.setHours(0, 0, 0, 0)
+        if (contractDate < fromDate) matchesDate = false
+      }
+      if (dateTo) {
+        const toDate = new Date(dateTo)
+        toDate.setHours(23, 59, 59, 999)
+        if (contractDate > toDate) matchesDate = false
+      }
+    }
+    let matchesPrice = true
+    if (priceMin || priceMax) {
+      const price = c.huurprijs ?? 0
+      const num = typeof price === 'number' ? price : Number(price)
+      const n = Number.isFinite(num) ? num : 0
+      if (priceMin && n < parseFloat(priceMin)) matchesPrice = false
+      if (priceMax && n > parseFloat(priceMax)) matchesPrice = false
+    }
+    return matchesDate && matchesPrice
+  })
+}
+
 export default function HuizenPage() {
   const pathname = usePathname()
   const [contracts, setContracts] = useState<ContractFile[]>([])
@@ -140,13 +170,17 @@ export default function HuizenPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [sortBy, setSortBy] = useState<SortOption>('label-asc')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
+  const [priceMin, setPriceMin] = useState<string>('')
+  const [priceMax, setPriceMax] = useState<string>('')
   const [pushedToWhiseDocNames, setPushedToWhiseDocNames] = useState<Set<string>>(() => new Set())
   const [manualPushDocNames, setManualPushDocNames] = useState<Set<string>>(() => new Set())
-  const [level2HuizenCollapsed, setLevel2HuizenCollapsed] = useState(false)
   const sidebar = useSidebar()
 
   const contentRef = useRef<HTMLDivElement>(null)
-  const refPrevLevel = useRef<1 | 2 | 3>(1)
+  const refPrevLevel = useRef<1 | 3>(1)
   const [panelWidths, setPanelWidths] = useState(() => {
     if (typeof window === 'undefined') return DEFAULTS
     try {
@@ -216,14 +250,14 @@ export default function HuizenPage() {
     setResizing(which)
   }
 
-  const level = selectedCategoryId ? 3 : selectedHuisKey ? 2 : 1
+  // Niveau 2 is verwijderd: direct van 1 (lijst huizen) naar 3 (categorieën + documenten + detail)
+  const level = selectedHuisKey ? 3 : 1
   const prevLevelForAnimation = refPrevLevel.current
   useEffect(() => {
     refPrevLevel.current = level
   }, [level])
-  // Auto-inklappen sidebar wanneer je naar niveau 2 of 3 gaat (huis/categorie geselecteerd)
   useEffect(() => {
-    if (level >= 2 && sidebar?.setCollapsed) sidebar.setCollapsed(true)
+    if (level === 3 && sidebar?.setCollapsed) sidebar.setCollapsed(true)
   }, [level, sidebar?.setCollapsed])
 
   useEffect(() => {
@@ -274,6 +308,11 @@ export default function HuizenPage() {
     return () => window.removeEventListener('huizen-reset-level1', goToLevel1)
   }, [])
 
+  // Van niveau 1 naar 3: bij huis geselecteerd altijd een categorie (standaard huurcontracten)
+  useEffect(() => {
+    if (selectedHuisKey && selectedCategoryId === null) setSelectedCategoryId('huurcontracten')
+  }, [selectedHuisKey, selectedCategoryId])
+
   // Auto-refresh elke 30 seconden (zoals op contracts page). Geen refresh op login/account-aanvragen.
   useEffect(() => {
     if (pathname === '/login' || pathname?.startsWith('/login/')) return
@@ -293,7 +332,10 @@ export default function HuizenPage() {
 
   const filteredAndSortedHuizen = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    let list = huizenList.filter((h) => houseMatchesStatusFilter(h.contracts, statusFilter, pushedToWhiseDocNames))
+    let list = huizenList.filter((h) =>
+      houseMatchesStatusFilter(h.contracts, statusFilter, pushedToWhiseDocNames) &&
+      houseMatchesAdvancedFilters(h.contracts, dateFrom, dateTo, priceMin, priceMax)
+    )
     if (q) list = list.filter((h) =>
       h.label.toLowerCase().includes(q) ||
       h.key.toLowerCase().includes(q) ||
@@ -307,7 +349,7 @@ export default function HuizenPage() {
     else if (cmp === 'contracts-desc') list.sort((a, b) => b.contracts.length - a.contracts.length)
     else if (cmp === 'contracts-asc') list.sort((a, b) => a.contracts.length - b.contracts.length)
     return list
-  }, [huizenList, searchQuery, sortBy, statusFilter, pushedToWhiseDocNames])
+  }, [huizenList, searchQuery, sortBy, statusFilter, pushedToWhiseDocNames, dateFrom, dateTo, priceMin, priceMax])
 
   const selectedHuis = selectedHuisKey ? huizenList.find(h => h.key === selectedHuisKey) : null
   const categoryContracts = selectedHuis && selectedCategoryId
@@ -407,77 +449,37 @@ export default function HuizenPage() {
           level === 1 ? 'md:flex md:flex-col md:overflow-x-hidden' : 'md:flex md:flex-row'
         )}
       >
-        {(level === 1 || level === 2) && (
+        {level === 1 && (
           <>
-            {/* Niveau 2 ingeklapt: alleen smalle strip met knop om uit te klappen */}
-            {level === 2 && level2HuizenCollapsed && (
-              <div className="flex flex-col shrink-0 min-h-0 w-10 border-r border-border bg-muted/30 items-center justify-center">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setLevel2HuizenCollapsed(false)}
-                  title="Huizenlijst tonen"
-                >
-                  <PanelLeftOpen className="h-4 w-4" />
-                </Button>
-              </div>
-            )}
-            {(level === 1 || (level === 2 && !level2HuizenCollapsed)) && (
             <div
-              className={cn(
-                'block md:flex md:flex-col min-h-0 transition-[width] duration-300 ease-out',
-                level === 1 ? 'border-0 min-w-0 w-full md:flex-1' : 'shrink-0 border-r border-border min-w-[120px]'
-              )}
-              style={level === 1 ? undefined : { width: `${panelWidths.left}%` }}
+              className="block md:flex md:flex-col min-h-0 transition-[width] duration-300 ease-out border-0 min-w-0 w-full md:flex-1"
             >
-              {/* Header: niv1 = titel + uitleg, niv2 = terug + Huizen + (in/uitklappen) + Filters wissen */}
-              <div className={cn('shrink-0 border-b border-border', level === 1 ? 'px-6 pt-4 pb-2' : '')}>
-                <div className={cn('flex items-center gap-2', level === 1 ? 'flex-wrap' : 'h-10 px-3')}>
-                  {level === 2 && (
-                    <>
-                      <Button variant="ghost" size="sm" onClick={() => setSelectedHuisKey(null)} title="Terug naar lijst"><ArrowLeft className="h-4 w-4" /></Button>
-                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setLevel2HuizenCollapsed(true)} title="Huizenlijst inklappen"><PanelLeftClose className="h-3.5 w-3.5" /></Button>
-                    </>
-                  )}
-                  {level === 1 ? (
-                    <>
-                      <div className="flex-1 min-w-0">
-                        <h2 className="text-xl font-semibold text-foreground">Lijst huizen</h2>
-                        <p className="text-sm text-muted-foreground mt-0.5">
-                          Overzicht per pand. Klik op een huis om de 10 documentcategorieën te bekijken en documenten te openen. Gebruik de filters om te zoeken of te sorteren.
-                        </p>
-                      </div>
-                      {(searchQuery.trim() || sortBy !== 'label-asc' || statusFilter !== 'all') && (
-                        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => { setSearchQuery(''); setSortBy('label-asc'); setStatusFilter('all') }}>
-                          Filters wissen
-                        </Button>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-xs font-medium text-muted-foreground">Huizen</span>
-                      {(searchQuery.trim() || sortBy !== 'label-asc' || statusFilter !== 'all') && (
-                        <Button variant="ghost" size="sm" className="ml-auto h-7 text-xs text-muted-foreground hover:text-foreground" onClick={() => { setSearchQuery(''); setSortBy('label-asc'); setStatusFilter('all') }}>
-                          Filters wissen
-                        </Button>
-                      )}
-                    </>
+              <div className="shrink-0 border-b border-border px-6 pt-4 pb-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <h2 className="text-xl font-semibold text-foreground">Lijst huizen</h2>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Overzicht per pand. Klik op een huis om documenten te bekijken. Gebruik de filters om te zoeken of te sorteren.
+                    </p>
+                  </div>
+                  {(searchQuery.trim() || sortBy !== 'label-asc' || statusFilter !== 'all' || dateFrom || dateTo || priceMin || priceMax) && (
+                    <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => { setSearchQuery(''); setSortBy('label-asc'); setStatusFilter('all'); setDateFrom(''); setDateTo(''); setPriceMin(''); setPriceMax('') }}>
+                      Filters wissen
+                    </Button>
                   )}
                 </div>
-                {/* Filters: niv1 naast elkaar, niv2 onder elkaar */}
-                <div className={cn('flex gap-2', level === 1 ? 'flex-row flex-wrap mt-4' : 'flex-col px-2 pb-2 mt-0')}>
-                  <div className={cn('relative', level === 1 ? 'flex-1 min-w-[200px] max-w-md' : 'w-full')}>
+                <div className="flex gap-2 flex-row flex-wrap mt-4">
+                  <div className="relative flex-1 min-w-[200px] max-w-md">
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                     <Input
                       placeholder="Zoeken op adres, sleutel of naam client..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className={cn('pl-8 h-8 w-full', level === 1 ? 'bg-secondary border-border' : 'text-sm')}
+                      className="pl-8 h-8 w-full bg-secondary border-border"
                     />
                   </div>
                   <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortOption)}>
-                    <SelectTrigger size="sm" className={cn('h-8', level === 1 ? 'w-[180px] bg-secondary border-border' : 'w-full text-xs')}>
+                    <SelectTrigger size="sm" className="h-8 w-[180px] bg-secondary border-border">
                       <SelectValue placeholder="Sorteren" />
                     </SelectTrigger>
                     <SelectContent>
@@ -487,7 +489,7 @@ export default function HuizenPage() {
                     </SelectContent>
                   </Select>
                   <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-                    <SelectTrigger size="sm" className={cn('h-8', level === 1 ? 'w-[180px] bg-secondary border-border' : 'w-full text-xs')}>
+                    <SelectTrigger size="sm" className="h-8 w-[180px] bg-secondary border-border">
                       <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
@@ -496,14 +498,77 @@ export default function HuizenPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                    className="h-8 bg-secondary border-border"
+                  >
+                    {showAdvancedFilters ? <ChevronUp className="h-4 w-4 mr-2 shrink-0" /> : <ChevronDown className="h-4 w-4 mr-2 shrink-0" />}
+                    Geavanceerde filters
+                  </Button>
+                  {(dateFrom || dateTo || priceMin || priceMax) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => { setDateFrom(''); setDateTo(''); setPriceMin(''); setPriceMax('') }}
+                      className="h-8 text-muted-foreground"
+                    >
+                      <X className="h-4 w-4 mr-2 shrink-0" />
+                      Geavanceerd wissen
+                    </Button>
+                  )}
                 </div>
+                {/* Geavanceerde filters: datum- en prijsbereik */}
+                {showAdvancedFilters && (
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 p-4 bg-muted/50 rounded-lg border border-border mx-0 mt-3">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Datum van</label>
+                      <Input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                        className="bg-background"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Datum tot</label>
+                      <Input
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                        className="bg-background"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Min. prijs (€)</label>
+                      <Input
+                        type="number"
+                        placeholder="0"
+                        value={priceMin}
+                        onChange={(e) => setPriceMin(e.target.value)}
+                        className="bg-background"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Max. prijs (€)</label>
+                      <Input
+                        type="number"
+                        placeholder="∞"
+                        value={priceMax}
+                        onChange={(e) => setPriceMax(e.target.value)}
+                        className="bg-background"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
               {/* Resultaat teller alleen op niv1 */}
               {level === 1 && !loading && (
                 <div className="px-6 py-2 border-b border-border">
                   <p className="text-sm text-muted-foreground">
                     {filteredAndSortedHuizen.length} van {huizenList.length} huizen
-                    {(searchQuery.trim() || statusFilter !== 'all') && ' (gefilterd)'}
+                    {(searchQuery.trim() || statusFilter !== 'all' || dateFrom || dateTo || priceMin || priceMax) && ' (gefilterd)'}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1 md:hidden">Scroll naar beneden voor de lijst met panden.</p>
                 </div>
@@ -518,9 +583,9 @@ export default function HuizenPage() {
                     <div className="p-4 text-muted-foreground text-sm">Laden...</div>
                   ) : filteredAndSortedHuizen.length === 0 ? (
                     <div className="p-4 text-muted-foreground text-sm">
-                      {searchQuery.trim() || statusFilter !== 'all' ? 'Geen huizen voor deze zoek- of filtercriteria.' : 'Geen huizen.'}
+                      {searchQuery.trim() || statusFilter !== 'all' || dateFrom || dateTo || priceMin || priceMax ? 'Geen huizen voor deze zoek- of filtercriteria.' : 'Geen huizen.'}
                     </div>
-                  ) : level === 1 ? (
+                  ) : (
                     <div className="grid gap-4">
                       {filteredAndSortedHuizen.map(({ key, label, contracts: houseContracts }) => {
                         const houseStatus = getHouseStatus(houseContracts, pushedToWhiseDocNames)
@@ -538,7 +603,7 @@ export default function HuizenPage() {
                           <button
                             key={key}
                             type="button"
-                            onClick={() => setSelectedHuisKey(key)}
+                            onClick={() => { setSelectedHuisKey(key); setSelectedCategoryId('huurcontracten') }}
                             className="w-full text-left"
                           >
                             <Card className="bg-card border-border hover:border-primary/50 hover:shadow-md transition-all cursor-pointer group h-full">
@@ -620,109 +685,20 @@ export default function HuizenPage() {
                         )
                       })}
                     </div>
-                  ) : (
-                    <div className="space-y-1">
-                      {filteredAndSortedHuizen.map(({ key, label, contracts: houseContracts }) => {
-                        const houseStatus = getHouseStatus(houseContracts, pushedToWhiseDocNames)
-                        const catsFulfilled = countCategoriesFulfilled(houseContracts)
-                        const statusStyles = {
-                          error: 'border-l-4 border-l-status-error bg-status-error/5 hover:bg-status-error/10',
-                          needs_review: 'border-l-4 border-l-status-warning bg-status-warning/5 hover:bg-status-warning/10',
-                          pending: 'border-l-4 border-l-status-pending bg-status-pending/5 hover:bg-status-pending/10',
-                          manually_edited: 'border-l-4 border-l-blue-500 bg-blue-500/5 hover:bg-blue-500/10',
-                          pushed: 'border-l-4 border-l-status-success bg-status-success/5 hover:bg-status-success/10',
-                        }
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            onClick={() => setSelectedHuisKey(key)}
-                            className={cn(
-                              'w-full text-left rounded-lg border border-border transition-colors px-3 py-2 text-sm',
-                              statusStyles[houseStatus],
-                              key === selectedHuisKey && 'ring-2 ring-primary/50 font-medium'
-                            )}
-                          >
-                            <span className="truncate block">{label}</span>
-                            <span className="text-xs text-muted-foreground block mt-0.5">{catsFulfilled}/{CATEGORIES.length} categorieën voldaan</span>
-                          </button>
-                        )
-                      })}
-                    </div>
                   )}
                 </div>
               </div>
             </div>
             )}
-            {level === 2 && !level2HuizenCollapsed && (
-              <div
-                role="separator"
-                aria-label="Resize linker paneel"
-                className={cn('w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors', (resizing === 'level1' || resizing === 'left') && 'bg-primary/50')}
-                onMouseDown={startResize('left')}
-              />
-            )}
-            {level === 1 ? null : selectedHuis ? (
-              <div className={cn('flex flex-1 min-w-0 min-h-0 overflow-hidden', prevLevelForAnimation === 3 ? 'huizen-level-back' : 'huizen-level-in')}>
-                <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden border-r border-border">
-                  <div className="h-10 px-4 flex items-center shrink-0 border-b border-border font-medium text-foreground">Categorieën — {selectedHuis.label}</div>
-                  <ScrollArea className="flex-1 min-h-0 overflow-y-auto">
-                    <div className="p-4 grid gap-3">
-                      {CATEGORIES.map((cat) => {
-                        const docs = getContractsForCategory(selectedHuis.contracts, cat.id)
-                        const count = docs.length
-                        const avgConf = count ? docs.reduce((a, d) => a + (d.confidence ?? 0), 0) / count : 0
-                        const pushedCount = count ? docs.filter(d => getEffectiveContractStatus(d, pushedToWhiseDocNames) === 'pushed').length : 0
-                        return (
-                          <button
-                            key={cat.id}
-                            type="button"
-                            onClick={() => { setSelectedCategoryId(cat.id); setEditingDocName(null) }}
-                            className="flex items-center gap-4 w-full text-left p-4 rounded-lg border border-border bg-card hover:bg-accent/50 transition-colors"
-                          >
-                            <cat.icon className="h-5 w-5 text-muted-foreground shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium text-foreground">{cat.label}</div>
-                              <div className="text-sm text-muted-foreground">
-                                {count > 0 ? `${count} doc. · gem. confidence ${Math.round(avgConf)}% · ${pushedCount} naar Whise` : 'Geen documenten'}
-                              </div>
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </ScrollArea>
-                </div>
-                <div
-                  role="separator"
-                  aria-label="Resize rechter paneel"
-                  className={cn('w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary/30 transition-colors', resizing === 'right' && 'bg-primary/50')}
-                  onMouseDown={startResize('right')}
-                />
-                <div className="p-3 border-border bg-muted/20 shrink-0 min-w-[100px]" style={{ width: `${panelWidths.right}%` }}>
-                  <div className="text-sm font-medium text-foreground mb-2">Overzicht pand</div>
-                  <div className="space-y-3 text-sm text-muted-foreground">
-                    <div>
-                      <div className="text-foreground font-medium">Categorieën</div>
-                      <div className="text-base font-semibold tabular-nums">{CATEGORIES.filter(c => getContractsForCategory(selectedHuis.contracts, c.id).length > 0).length} / 10</div>
-                    </div>
-                    <div>
-                      <div className="text-foreground font-medium">Whise</div>
-                      <div className="text-base font-semibold tabular-nums">{selectedHuis.contracts.filter(c => getEffectiveContractStatus(c, pushedToWhiseDocNames) === 'pushed').length}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </>
         )}
 
-        {/* ——— Niveau 3: categorieën | documenten + detail — terug naar niveau 1 via sidebar "Huizen" ——— */}
-        {level === 3 && selectedHuis && selectedCategoryId && (
+        {/* ——— Niveau 3: categorieën | documenten + detail — terug naar niveau 1 via knop of sidebar "Huizen" ——— */}
+        {level === 3 && selectedHuis && (selectedCategoryId ?? 'huurcontracten') && (
           <div className="huizen-level3-in flex flex-1 min-w-0 min-h-0">
             <div className="flex flex-col shrink-0 min-h-0 border-r border-border min-w-[100px]" style={{ width: `${panelWidths.left * 0.5}%` }}>
               <div className="h-10 px-3 flex items-center gap-2 shrink-0 border-b border-border">
-                <Button variant="ghost" size="sm" onClick={() => setSelectedCategoryId(null)}><ArrowLeft className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="sm" onClick={() => { setSelectedHuisKey(null); setSelectedCategoryId(null) }} title="Terug naar lijst huizen"><ArrowLeft className="h-4 w-4" /></Button>
                 <span className="text-xs font-medium text-muted-foreground">Categorieën</span>
               </div>
               <ScrollArea className="flex-1 min-h-0">

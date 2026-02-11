@@ -22,6 +22,7 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    NEXT_PUBLIC_SCRIPT_ACTIVE: process.env.NEXT_PUBLIC_SCRIPT_ACTIVE ?? 'false',
     // E-mail account-aanvraag (zelfde .env als Python)
     SENDER_EMAIL: process.env.SENDER_EMAIL,
     SENDER_PASSWORD: process.env.SENDER_PASSWORD,
