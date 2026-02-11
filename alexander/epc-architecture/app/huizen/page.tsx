@@ -384,58 +384,58 @@ export default function HuizenPage() {
     <div className="block md:flex md:flex-col md:min-h-full md:h-full md:min-h-0">
       {/* Boven: stats alleen op niveau 1 en 2 — op niveau 3 verborgen voor meer ruimte aan velden */}
       {level !== 3 && (
-        <div className="border-b border-border bg-card/50 px-3 py-1.5 shrink-0">
-          <div className="flex items-center justify-between flex-wrap gap-1.5">
-            <div className="flex items-center gap-2">
-              <div className="h-7 w-7 rounded-md bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border border-primary/20 flex items-center justify-center shrink-0">
-                <Building2 className="h-3.5 w-3.5 text-primary" />
+        <div className="border-b border-border bg-card/50 px-3 py-1 shrink-0">
+          <div className="flex items-center justify-between flex-wrap gap-1">
+            <div className="flex items-center gap-1.5">
+              <div className="h-6 w-6 rounded-md bg-gradient-to-br from-primary/20 via-primary/10 to-primary/5 border border-primary/20 flex items-center justify-center shrink-0">
+                <Building2 className="h-3 w-3 text-primary" />
               </div>
               <div>
-                <h1 className="text-lg font-semibold text-foreground leading-tight">Huizen</h1>
-                <p className="text-sm text-muted-foreground leading-tight">Overzicht per pand en documentcategorie</p>
+                <h1 className="text-base font-semibold text-foreground leading-tight">Huizen</h1>
+                <p className="text-xs text-muted-foreground leading-tight">Overzicht per pand en documentcategorie</p>
               </div>
             </div>
-            <Button size="sm" variant="outline" onClick={fetchContracts} disabled={loading} className="h-7 text-sm px-2">
-              <RefreshCw className={cn('h-4 w-4 mr-1.5', loading && 'animate-spin')} />
+            <Button size="sm" variant="outline" onClick={fetchContracts} disabled={loading} className="h-6 text-xs px-2">
+              <RefreshCw className={cn('h-3.5 w-3.5 mr-1', loading && 'animate-spin')} />
               Vernieuwen
             </Button>
           </div>
-          <div className="flex flex-wrap justify-center gap-2 mt-1.5">
+          <div className="flex flex-wrap justify-center gap-1.5 mt-1">
             <Card
-              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'all' && 'ring-2 ring-primary')}
+              className={cn('bg-card border-border shrink-0 w-[8rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'all' && 'ring-2 ring-primary')}
               onClick={() => setStatusFilter('all')}
             >
-              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-foreground leading-tight">{stats.total}</div><div className="text-sm text-muted-foreground leading-tight">Totaal</div></CardContent>
+              <CardContent className="px-2 py-1"><div className="text-lg font-bold text-foreground leading-tight">{stats.total}</div><div className="text-xs text-muted-foreground leading-tight">Totaal</div></CardContent>
             </Card>
             <Card
-              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'pushed' && 'ring-2 ring-green-600')}
+              className={cn('bg-card border-border shrink-0 w-[8rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'pushed' && 'ring-2 ring-green-600')}
               onClick={() => setStatusFilter('pushed')}
             >
-              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-green-600 leading-tight">{stats.pushed}</div><div className="text-sm text-muted-foreground leading-tight">Compleet</div></CardContent>
+              <CardContent className="px-2 py-1"><div className="text-lg font-bold text-green-600 leading-tight">{stats.pushed}</div><div className="text-xs text-muted-foreground leading-tight">Compleet</div></CardContent>
             </Card>
             <Card
-              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'needs_review' && 'ring-2 ring-yellow-600')}
+              className={cn('bg-card border-border shrink-0 w-[8rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'needs_review' && 'ring-2 ring-yellow-600')}
               onClick={() => setStatusFilter('needs_review')}
             >
-              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-yellow-600 leading-tight">{stats.needs_review}</div><div className="text-sm text-muted-foreground leading-tight">Review</div></CardContent>
+              <CardContent className="px-2 py-1"><div className="text-lg font-bold text-yellow-600 leading-tight">{stats.needs_review}</div><div className="text-xs text-muted-foreground leading-tight">Review</div></CardContent>
             </Card>
             <Card
-              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'pending' && 'ring-2 ring-status-pending')}
+              className={cn('bg-card border-border shrink-0 w-[8rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'pending' && 'ring-2 ring-status-pending')}
               onClick={() => setStatusFilter('pending')}
             >
-              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-status-pending leading-tight">{stats.pending}</div><div className="text-sm text-muted-foreground leading-tight">Pending</div></CardContent>
+              <CardContent className="px-2 py-1"><div className="text-lg font-bold text-status-pending leading-tight">{stats.pending}</div><div className="text-xs text-muted-foreground leading-tight">Pending</div></CardContent>
             </Card>
             <Card
-              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'error' && 'ring-2 ring-red-600')}
+              className={cn('bg-card border-border shrink-0 w-[8rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'error' && 'ring-2 ring-red-600')}
               onClick={() => setStatusFilter('error')}
             >
-              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-red-600 leading-tight">{stats.error}</div><div className="text-sm text-muted-foreground leading-tight">Errors</div></CardContent>
+              <CardContent className="px-2 py-1"><div className="text-lg font-bold text-red-600 leading-tight">{stats.error}</div><div className="text-xs text-muted-foreground leading-tight">Errors</div></CardContent>
             </Card>
             <Card
-              className={cn('bg-card border-border shrink-0 w-[10rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'manually_edited' && 'ring-2 ring-blue-500')}
+              className={cn('bg-card border-border shrink-0 w-[8rem] cursor-pointer transition-colors hover:bg-muted/50', statusFilter === 'manually_edited' && 'ring-2 ring-blue-500')}
               onClick={() => setStatusFilter('manually_edited')}
             >
-              <CardContent className="px-2 py-1.5"><div className="text-xl font-bold text-blue-500 leading-tight">{stats.manually_edited}</div><div className="text-sm text-muted-foreground leading-tight">Manueel</div></CardContent>
+              <CardContent className="px-2 py-1"><div className="text-lg font-bold text-blue-500 leading-tight">{stats.manually_edited}</div><div className="text-xs text-muted-foreground leading-tight">Manueel</div></CardContent>
             </Card>
           </div>
         </div>
