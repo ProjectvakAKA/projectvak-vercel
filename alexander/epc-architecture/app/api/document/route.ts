@@ -48,8 +48,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Query parameter path is verplicht.' }, { status: 400 });
   }
 
-  // Dropbox API vereist pad met leading slash: /folder/file.pdf
-  const path = pathParam.startsWith('/') ? pathParam : `/${pathParam}`;
+  // Normaliseer pad: leading slash, geen dubbele slashes (Dropbox vereist /folder/file.pdf)
+  let path = pathParam.trim().replace(/\/+/g, '/');
+  if (!path.startsWith('/')) path = `/${path}`;
 
   if (!path.toLowerCase().endsWith('.pdf')) {
     return NextResponse.json({ error: 'Alleen PDF-bestanden worden ondersteund.' }, { status: 400 });
@@ -63,14 +64,21 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const clients = [source, target].filter(Boolean) as Dropbox[];
+  // Eerst TARGET proberen (waar georganiseerde bestanden kunnen staan), dan SOURCE (dbx_organize)
+  const clients: { name: string; dbx: Dropbox }[] = [];
+  if (target) clients.push({ name: 'TARGET', dbx: target });
+  if (source) clients.push({ name: 'SOURCE', dbx: source });
+
   let lastError: unknown = null;
   let lastStatus = 500;
 
-  for (const dbx of clients) {
+  console.info('Document API: requesting path', path, 'clients:', clients.map((c) => c.name));
+  for (const { name, dbx } of clients) {
     try {
+      console.info('Document API: trying', name);
       const out = await tryDownload(dbx, path);
       if (out) {
+        console.info('Document API: success via', name);
         return new NextResponse(out.buffer, {
           status: 200,
           headers: {
@@ -83,20 +91,25 @@ export async function GET(request: NextRequest) {
       lastError = err;
       const e = err as { status?: number; error?: { '.tag'?: string; path?: { '.tag'?: string }; error_summary?: string } };
       lastStatus = e?.status ?? 500;
-      console.error('Document download attempt failed:', { path, status: e?.status, error: e?.error, err });
+      console.error('Document API: failed via', name, { path, status: e?.status, error_summary: e?.error?.error_summary });
     }
   }
 
   const e = lastError as { status?: number; error?: { error_summary?: string } };
   const status = e?.status ?? lastStatus;
   const summary = String(e?.error?.error_summary ?? '');
+  const isPathNotFound = status === 404 || status === 409 || /path\/not_found|not_found/.test(summary);
   let message = 'Kon PDF niet ophalen.';
-  if (status === 404 || /not_found/.test(summary)) {
-    message = 'PDF niet gevonden in Dropbox.';
+  if (isPathNotFound) {
+    message =
+      'PDF niet gevonden in Dropbox. Zet op Vercel dezelfde Dropbox-account als je pipeline (APP_KEY_SOURCE_FULL + REFRESH_TOKEN_SOURCE_FULL van de account waar de bestanden staan).';
   } else if (status === 401 || status === 403) {
     message = 'Geen toegang tot Dropbox. Controleer SOURCE- en TARGET-credentials in Vercel.';
   }
 
-  console.error('Document download error (all attempts failed):', { pathParam, lastStatus, lastError });
-  return NextResponse.json({ error: message }, { status: status >= 400 ? status : 500 });
+  console.error('Document download error (all attempts failed):', { pathParam, path, lastStatus, lastError });
+  return NextResponse.json(
+    { error: message, path: path },
+    { status: status >= 400 ? status : 500 }
+  );
 }

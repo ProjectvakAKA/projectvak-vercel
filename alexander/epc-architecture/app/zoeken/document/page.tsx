@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo, Suspense } from 'react'
+import { useState, useEffect, useMemo, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { PdfViewerWithSearch } from './PdfViewerWithSearch'
 
 // Markeert de zoekterm in een snippet (geel).
 function HighlightSnippet({ text, query }: { text: string; query: string }) {
@@ -36,13 +37,66 @@ function DocumentPageContent() {
 
   const [pdfError, setPdfError] = useState<string | null>(null)
   const [pdfLoading, setPdfLoading] = useState(true)
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null)
   const [snippetsOpen, setSnippetsOpen] = useState(true) // standaard open zodat je direct ziet waar de zoekterm staat
   const [snippets, setSnippets] = useState<string[]>([])
+  const blobUrlRef = useRef<string | null>(null)
 
-  const pdfUrl = useMemo(() => {
+  const apiUrl = useMemo(() => {
     if (!path.trim()) return null
     return `/api/document?path=${encodeURIComponent(path)}`
   }, [path])
+
+  // PDF ophalen via fetch: bij fout tonen we de melding in de UI (niet JSON in iframe)
+  useEffect(() => {
+    if (!apiUrl || !path.trim()) {
+      setPdfBlobUrl(null)
+      setPdfError(null)
+      setPdfLoading(false)
+      return
+    }
+    setPdfLoading(true)
+    setPdfError(null)
+    let cancelled = false
+    fetch(apiUrl)
+      .then((res) => {
+        if (cancelled) return
+        if (!res.ok) {
+          return res.json().then((data: { error?: string }) => {
+            setPdfError(data?.error ?? 'PDF kon niet geladen worden.')
+            setPdfBlobUrl(null)
+          })
+        }
+        return res.blob().then((blob) => {
+          if (cancelled) return
+          if (blobUrlRef.current) {
+            URL.revokeObjectURL(blobUrlRef.current)
+            blobUrlRef.current = null
+          }
+          const url = URL.createObjectURL(blob)
+          blobUrlRef.current = url
+          setPdfBlobUrl(url)
+          setPdfError(null)
+        })
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPdfError('PDF kon niet geladen worden.')
+          setPdfBlobUrl(null)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPdfLoading(false)
+      })
+    return () => {
+      cancelled = true
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current)
+        blobUrlRef.current = null
+      }
+      setPdfBlobUrl(null)
+    }
+  }, [apiUrl, path])
 
   // Optioneel: snippets ophalen voor uitklapbare "Waar gevonden" (klein)
   useEffect(() => {
@@ -76,7 +130,7 @@ function DocumentPageContent() {
           </span>
           {q.trim() && (
             <span className="text-xs text-muted-foreground shrink-0">
-              — je zoekterm &quot;{q}&quot; staat hieronder gemarkeerd in de vindplaatsen
+              — &quot;{q}&quot; wordt in de PDF-viewer en in de vindplaatsen gemarkeerd
             </span>
           )}
         </div>
@@ -109,9 +163,9 @@ function DocumentPageContent() {
         </div>
       )}
 
-      {/* PDF: viewer met highlight in de pagina zelf */}
+      {/* PDF: viewer met zoekterm-gemarkeerd in de PDF zelf */}
       <div className="flex-1 min-h-0 flex flex-col p-4">
-        {!pdfUrl ? (
+        {!apiUrl ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             Geen document geselecteerd. Ga terug naar Zoeken en klik op &quot;Bekijk PDF&quot;.
           </div>
@@ -121,32 +175,43 @@ function DocumentPageContent() {
               <div className="mb-4 p-4 rounded-lg bg-destructive/10 text-destructive flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 {pdfError}
+                {path && (
+                  <span className="text-xs opacity-80 block mt-1" title={path}>
+                    Pad: {path.length > 60 ? path.slice(0, 60) + '…' : path}
+                  </span>
+                )}
               </div>
             )}
             <div className="relative flex-1 min-h-[500px] rounded-lg border border-border bg-muted/20 overflow-hidden flex flex-col">
-              <iframe
-                src={pdfUrl}
-                title={name}
-                className={cn(
-                  'w-full flex-1 min-h-[500px] rounded-lg',
-                  pdfLoading && 'opacity-0'
-                )}
-                onLoad={() => { setPdfLoading(false); setPdfError(null) }}
-                onError={() => { setPdfLoading(false); setPdfError('PDF kon niet geladen worden.') }}
-              />
               {pdfLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-muted/30 rounded-lg">
+                <div className="absolute inset-0 flex items-center justify-center bg-muted/30 rounded-lg z-10">
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                 </div>
               )}
-              <div className="mt-2 flex justify-end">
-                <Button variant="ghost" size="sm" asChild>
-                  <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="gap-2">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    PDF in nieuw tabblad openen
-                  </a>
-                </Button>
-              </div>
+              {!pdfLoading && pdfBlobUrl && (
+                <div className="flex-1 min-h-[500px] overflow-auto">
+                  <PdfViewerWithSearch
+                    fileUrl={pdfBlobUrl}
+                    keyword={q}
+                    onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')}
+                  />
+                </div>
+              )}
+              {!pdfLoading && !pdfBlobUrl && !pdfError && (
+                <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                  Geen PDF beschikbaar.
+                </div>
+              )}
+              {pdfBlobUrl && (
+                <div className="mt-2 flex justify-end">
+                  <Button variant="ghost" size="sm" asChild>
+                    <a href={pdfBlobUrl} target="_blank" rel="noopener noreferrer" className="gap-2">
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      PDF in nieuw tabblad openen
+                    </a>
+                  </Button>
+                </div>
+              )}
             </div>
           </>
         )}
