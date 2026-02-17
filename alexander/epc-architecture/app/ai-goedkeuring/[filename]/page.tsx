@@ -6,7 +6,7 @@ import { useParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ArrowLeft, FileText, Check, Pencil, Loader2, Save, Eye } from 'lucide-react'
+import { ArrowLeft, FileText, Check, Pencil, Loader2, Save, Eye, Highlighter } from 'lucide-react'
 import { PdfViewerWithSearch } from '@/app/zoeken/document/PdfViewerWithSearch'
 import { cn } from '@/lib/utils'
 
@@ -79,6 +79,7 @@ export default function AIGoedkeuringDetailPage() {
   const [pdfLoading, setPdfLoading] = useState(false)
   const [pdfError, setPdfError] = useState<string | null>(null)
   const blobUrlRef = useRef<string | null>(null)
+  const [highlightInPdf, setHighlightInPdf] = useState<string | null>(null)
 
   useEffect(() => {
     if (!filename) {
@@ -286,16 +287,20 @@ export default function AIGoedkeuringDetailPage() {
             )}
             {pdfPath && pdfBlobUrl && !pdfLoading && (
               <div className="h-full overflow-auto">
-                <PdfViewerWithSearch fileUrl={pdfBlobUrl} keyword="" onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')} />
+                <PdfViewerWithSearch
+                  fileUrl={pdfBlobUrl}
+                  keyword={highlightInPdf ?? ''}
+                  onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')}
+                />
               </div>
             )}
           </div>
         </div>
 
-        {/* Rechts: per vak wat AI zag / wat het ervan maakte */}
+        {/* Rechts: per vak — toon in PDF (fluo) en Ja / Aanpassen */}
         <div className="flex-1 overflow-auto p-4 md:p-6">
           <p className="text-sm text-muted-foreground mb-4">
-            Per vak: wat de AI in het document zag (indien beschikbaar) en wat het ervan maakte. Keur goed of pas aan.
+            Per vak: toon waar de AI het vond in het PDF (fluo) en keur goed met Ja, of pas aan.
           </p>
           {error && (
             <div className="mb-4 p-4 rounded-lg bg-destructive/10 text-destructive text-sm">
@@ -303,71 +308,87 @@ export default function AIGoedkeuringDetailPage() {
             </div>
           )}
           <div className="space-y-3">
-            {findings.map((f) => (
-              <Card key={f.path} className="border-border">
-                <CardContent className="p-4">
-                  <div className="mb-2">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{f.label}</p>
-                  </div>
-                  <div className="grid gap-2 text-sm mb-3">
-                    <div>
-                      <span className="text-muted-foreground">Wat de AI zag: </span>
-                      <span className="text-foreground/80 italic">—</span>
-                      <span className="text-muted-foreground text-xs ml-1">(niet opgeslagen per vak)</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Wat het ervan maakte: </span>
-                      {editingPath === f.path ? (
-                        <div className="flex flex-wrap items-center gap-2 mt-1">
-                          <Input
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            className="max-w-xs"
-                            autoFocus
-                          />
-                          <Button size="sm" onClick={applyEdit}>
-                            Toepassen
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => { setEditingPath(null); setEditValue('') }}>
-                            Annuleren
-                          </Button>
-                        </div>
-                      ) : (
-                        <span className={cn("font-medium", (f.value === '' || f.value == null) && "text-muted-foreground italic")}>
-                          {f.value !== '' && f.value != null ? String(f.value) : 'Niets gevonden'}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  {editingPath !== f.path && (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {f.status === 'approved' && (
-                        <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
-                          <Check className="h-3.5 w-3.5" />
-                          Goedgekeurd
-                        </span>
-                      )}
-                      {f.status === 'edited' && (
-                        <span className="text-xs text-amber-600 dark:text-amber-400">Aangepast</span>
-                      )}
-                      <Button
-                        size="sm"
-                        variant={f.status === 'approved' ? 'outline' : 'default'}
-                        className="gap-1"
-                        onClick={() => handleApprove(f.path)}
-                      >
-                        <Check className="h-3.5 w-3.5" />
-                        Goedkeuren
-                      </Button>
-                      <Button size="sm" variant="outline" className="gap-1" onClick={() => startEdit(f)}>
-                        <Pencil className="h-3.5 w-3.5" />
-                        Aanpassen
-                      </Button>
-                    </div>
+            {findings.map((f) => {
+              const valueStr = f.value !== '' && f.value != null ? String(f.value) : null
+              const isHighlighted = valueStr && highlightInPdf === valueStr
+              return (
+                <Card
+                  key={f.path}
+                  className={cn(
+                    'border-border transition-colors',
+                    isHighlighted && 'ring-2 ring-amber-400 dark:ring-amber-500 bg-amber-50/50 dark:bg-amber-950/20'
                   )}
-                </CardContent>
-              </Card>
-            ))}
+                >
+                  <CardContent className="p-4">
+                    <div className="mb-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{f.label}</p>
+                    </div>
+                    <div className="grid gap-2 text-sm mb-3">
+                      <div>
+                        <span className="text-muted-foreground">Wat het ervan maakte: </span>
+                        {editingPath === f.path ? (
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            <Input
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              className="max-w-xs"
+                              autoFocus
+                            />
+                            <Button size="sm" onClick={applyEdit}>
+                              Toepassen
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => { setEditingPath(null); setEditValue('') }}>
+                              Annuleren
+                            </Button>
+                          </div>
+                        ) : (
+                          <span className={cn('font-medium', !valueStr && 'text-muted-foreground italic')}>
+                            {valueStr ?? 'Niets gevonden'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {editingPath !== f.path && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {f.status === 'approved' && (
+                          <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                            <Check className="h-3.5 w-3.5" />
+                            Goedgekeurd
+                          </span>
+                        )}
+                        {f.status === 'edited' && (
+                          <span className="text-xs text-amber-600 dark:text-amber-400">Aangepast</span>
+                        )}
+                        {valueStr && (
+                          <Button
+                            size="sm"
+                            variant={isHighlighted ? 'secondary' : 'outline'}
+                            className="gap-1"
+                            onClick={() => setHighlightInPdf((prev) => (prev === valueStr ? null : valueStr))}
+                          >
+                            <Highlighter className="h-3.5 w-3.5" />
+                            {isHighlighted ? 'In PDF getoond (fluo)' : 'Toon in PDF'}
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant={f.status === 'approved' ? 'outline' : 'default'}
+                          className="gap-1"
+                          onClick={() => handleApprove(f.path)}
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                          Ja
+                        </Button>
+                        <Button size="sm" variant="outline" className="gap-1" onClick={() => startEdit(f)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                          Aanpassen
+                        </Button>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
           {findings.length > 0 && (
             <div className="mt-6 flex justify-end">
