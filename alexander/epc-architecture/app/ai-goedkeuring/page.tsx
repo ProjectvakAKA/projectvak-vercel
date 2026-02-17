@@ -1,13 +1,22 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ClipboardCheck, FileText, ArrowRight, Search, Loader2 } from 'lucide-react'
+import { ClipboardCheck, FileText, ArrowRight, Search, Loader2, Building2 } from 'lucide-react'
 import { ContractFile, ContractsResponse } from '@/lib/types'
-import { cn } from '@/lib/utils'
+
+function groupContractsByHuis(contracts: ContractFile[]): Map<string, ContractFile[]> {
+  const map = new Map<string, ContractFile[]>()
+  for (const c of contracts) {
+    const key = (c.pand_adres && c.pand_adres.trim()) || c.name.replace(/^data_/, '').replace(/_\d{8}_\d{6}\.json$/i, '') || c.name
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(c)
+  }
+  return map
+}
 
 export default function AIGoedkeuringPage() {
   const [contracts, setContracts] = useState<ContractFile[]>([])
@@ -35,12 +44,23 @@ export default function AIGoedkeuringPage() {
     return () => { cancelled = true }
   }, [])
 
-  const filtered = contracts.filter(
-    (c) =>
-      !searchQuery.trim() ||
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.pand_adres?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.verhuurder_naam?.toLowerCase().includes(searchQuery.toLowerCase())
+  const huisMap = useMemo(() => groupContractsByHuis(contracts), [contracts])
+  const huizenList = useMemo(
+    () =>
+      Array.from(huisMap.entries())
+        .map(([key, list]) => ({ key, label: list[0]?.pand_adres || key, contracts: list }))
+        .filter(
+          (h) =>
+            !searchQuery.trim() ||
+            h.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            h.contracts.some(
+              (c) =>
+                c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                c.verhuurder_naam?.toLowerCase().includes(searchQuery.toLowerCase())
+            )
+        )
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [huisMap, searchQuery]
   )
 
   return (
@@ -94,40 +114,49 @@ export default function AIGoedkeuringPage() {
               Documenten laden…
             </div>
           ) : (
-            <div className="space-y-3">
-              {filtered.length === 0 ? (
+            <div className="space-y-8">
+              {huizenList.length === 0 ? (
                 <p className="text-muted-foreground text-center py-8">
-                  {searchQuery.trim() ? 'Geen documenten gevonden voor je zoekopdracht.' : 'Nog geen documenten om goed te keuren.'}
+                  {searchQuery.trim() ? 'Geen huizen of documenten gevonden voor je zoekopdracht.' : 'Nog geen documenten om goed te keuren.'}
                 </p>
               ) : (
-                filtered.map((contract) => (
-                  <Card key={contract.name} className="border-border overflow-hidden">
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="min-w-0 flex-1 flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-muted shrink-0">
-                            <FileText className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-medium text-foreground truncate" title={contract.name}>
-                              {contract.name.replace(/^data_/, '').replace(/_\d{8}_\d{6}\.json$/i, '')}
-                            </p>
-                            {(contract.pand_adres || contract.verhuurder_naam) && (
-                              <p className="text-xs text-muted-foreground truncate">
-                                {[contract.pand_adres, contract.verhuurder_naam].filter(Boolean).join(' · ')}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        <Button variant="outline" size="sm" className="shrink-0 gap-2" asChild>
-                          <Link href={`/ai-goedkeuring/${encodeURIComponent(contract.name)}`}>
-                            Bevindingen goedkeuren
-                            <ArrowRight className="h-3.5 w-3.5" />
-                          </Link>
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+                huizenList.map(({ key, label, contracts: houseContracts }) => (
+                  <section key={key}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <Building2 className="h-5 w-5 text-muted-foreground" />
+                      <h2 className="text-lg font-semibold text-foreground">{label}</h2>
+                      <span className="text-sm text-muted-foreground">({houseContracts.length} document{houseContracts.length !== 1 ? 'en' : ''})</span>
+                    </div>
+                    <div className="space-y-3">
+                      {houseContracts.map((contract) => (
+                        <Card key={contract.name} className="border-border overflow-hidden">
+                          <CardContent className="p-4">
+                            <div className="flex items-center justify-between gap-4">
+                              <div className="min-w-0 flex-1 flex items-center gap-3">
+                                <div className="p-2 rounded-lg bg-muted shrink-0">
+                                  <FileText className="h-4 w-4 text-muted-foreground" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="font-medium text-foreground truncate" title={contract.name}>
+                                    {contract.name.replace(/^data_/, '').replace(/_\d{8}_\d{6}\.json$/i, '')}
+                                  </p>
+                                  {contract.verhuurder_naam && (
+                                    <p className="text-xs text-muted-foreground truncate">{contract.verhuurder_naam}</p>
+                                  )}
+                                </div>
+                              </div>
+                              <Button variant="outline" size="sm" className="shrink-0 gap-2" asChild>
+                                <Link href={`/ai-goedkeuring/${encodeURIComponent(contract.name)}`}>
+                                  Bevindingen goedkeuren
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                </Link>
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </section>
                 ))
               )}
             </div>
