@@ -7,7 +7,26 @@ import { ArrowLeft, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp, Exte
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
-// Eenvoudige iframe-viewer: betrouwbaar, geen externe Worker/CORS. Zoekterm staat in "Waar gevonden" hierboven.
+// Markeert de zoekterm in een snippet (geel).
+function HighlightSnippet({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <span>{text}</span>
+  const q = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`(${q})`, 'gi')
+  const parts = text.split(re)
+  return (
+    <span>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <mark key={i} className="bg-amber-300/80 dark:bg-amber-500/50 text-amber-950 dark:text-amber-100 rounded px-0.5 font-medium">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </span>
+  )
+}
 
 function DocumentPageContent() {
   const searchParams = useSearchParams()
@@ -17,7 +36,7 @@ function DocumentPageContent() {
 
   const [pdfError, setPdfError] = useState<string | null>(null)
   const [pdfLoading, setPdfLoading] = useState(true)
-  const [snippetsOpen, setSnippetsOpen] = useState(false)
+  const [snippetsOpen, setSnippetsOpen] = useState(true) // standaard open zodat je direct ziet waar de zoekterm staat
   const [snippets, setSnippets] = useState<string[]>([])
 
   const pdfUrl = useMemo(() => {
@@ -57,30 +76,34 @@ function DocumentPageContent() {
           </span>
           {q.trim() && (
             <span className="text-xs text-muted-foreground shrink-0">
-              — zoekterm &quot;{q}&quot; zie je in &quot;Waar gevonden&quot; hieronder
+              — je zoekterm &quot;{q}&quot; staat hieronder gemarkeerd in de vindplaatsen
             </span>
           )}
         </div>
       </div>
 
-      {/* Optioneel: uitklapbare sectie met vindplaatsen (tekst) */}
-      {snippets.length > 0 && (
-        <div className="shrink-0 border-b border-border bg-muted/30">
+      {/* Waar je zoekterm in de PDF staat: altijd zichtbaar, zoekterm gemarkeerd */}
+      {q.trim() && (
+        <div className="shrink-0 border-b border-border bg-muted/40">
           <button
             type="button"
             onClick={() => setSnippetsOpen((o) => !o)}
-            className="w-full px-4 py-2 flex items-center justify-between text-sm font-medium text-foreground hover:bg-muted/50"
+            className="w-full px-4 py-3 flex items-center justify-between text-sm font-medium text-foreground hover:bg-muted/50"
           >
-            <span>Waar &quot;{q}&quot; in de tekst voorkomt ({snippets.length})</span>
+            <span>Waar &quot;{q}&quot; in dit document voorkomt{snippets.length > 0 ? ` (${snippets.length} vindplaats${snippets.length !== 1 ? 'en' : ''})` : ''}</span>
             {snippetsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </button>
           {snippetsOpen && (
-            <div className="px-4 pb-3 max-h-40 overflow-auto space-y-2">
-              {snippets.map((snippet, i) => (
-                <p key={i} className="text-sm text-muted-foreground bg-background rounded px-2 py-1">
-                  …{snippet}…
-                </p>
-              ))}
+            <div className="px-4 pb-4 max-h-52 overflow-auto space-y-3">
+              {snippets.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">Bezig met zoeken…</p>
+              ) : (
+                snippets.map((snippet, i) => (
+                  <div key={i} className="text-sm text-foreground/90 bg-background border border-border rounded-lg px-3 py-2 shadow-sm">
+                    <HighlightSnippet text={snippet} query={q} />
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>
