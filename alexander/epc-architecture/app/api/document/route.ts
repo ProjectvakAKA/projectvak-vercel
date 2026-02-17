@@ -38,7 +38,7 @@ async function tryDownload(dbx: Dropbox, path: string): Promise<{ buffer: Buffer
 
 /**
  * GET /api/document?path=... — Download PDF from Dropbox.
- * Probeert SOURCE, daarna TARGET. Pad met of zonder leading slash.
+ * Pad moet met / beginnen (bijv. /Georganiseerd/.../file.pdf). Probeert SOURCE, daarna TARGET.
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -48,10 +48,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Query parameter path is verplicht.' }, { status: 400 });
   }
 
-  const pathWithSlash = pathParam.startsWith('/') ? pathParam : `/${pathParam}`;
-  const pathNoSlash = pathWithSlash.replace(/^\//, '');
+  // Dropbox API vereist pad met leading slash: /folder/file.pdf
+  const path = pathParam.startsWith('/') ? pathParam : `/${pathParam}`;
 
-  if (!pathWithSlash.toLowerCase().endsWith('.pdf')) {
+  if (!path.toLowerCase().endsWith('.pdf')) {
     return NextResponse.json({ error: 'Alleen PDF-bestanden worden ondersteund.' }, { status: 400 });
   }
 
@@ -63,32 +63,27 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const pathsToTry = [pathWithSlash];
-  if (pathNoSlash !== pathWithSlash) pathsToTry.push(pathNoSlash);
-
   const clients = [source, target].filter(Boolean) as Dropbox[];
   let lastError: unknown = null;
   let lastStatus = 500;
 
   for (const dbx of clients) {
-    for (const path of pathsToTry) {
-      try {
-        const out = await tryDownload(dbx, path);
-        if (out) {
-          return new NextResponse(out.buffer, {
-            status: 200,
-            headers: {
-              'Content-Type': 'application/pdf',
-              'Content-Disposition': `inline; filename="${encodeURIComponent(out.filename)}"`,
-            },
-          });
-        }
-      } catch (err: unknown) {
-        lastError = err;
-        const e = err as { status?: number; error?: { '.tag'?: string; path?: { '.tag'?: string }; error_summary?: string } };
-        lastStatus = e?.status ?? 500;
-        console.error('Document download attempt failed:', { path, status: e?.status, error: e?.error, err });
+    try {
+      const out = await tryDownload(dbx, path);
+      if (out) {
+        return new NextResponse(out.buffer, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': `inline; filename="${encodeURIComponent(out.filename)}"`,
+          },
+        });
       }
+    } catch (err: unknown) {
+      lastError = err;
+      const e = err as { status?: number; error?: { '.tag'?: string; path?: { '.tag'?: string }; error_summary?: string } };
+      lastStatus = e?.status ?? 500;
+      console.error('Document download attempt failed:', { path, status: e?.status, error: e?.error, err });
     }
   }
 

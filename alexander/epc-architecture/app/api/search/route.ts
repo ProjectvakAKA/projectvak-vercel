@@ -41,19 +41,14 @@ function buildSnippets(fullText: string | null, query: string): string[] {
   return snippets;
 }
 
-/**
- * Zet zoekterm om naar prefix-query: "ant" → "ant*" zodat ook "Antwerpen", "antwoord" enz. gevonden worden.
- * Meerdere woorden: "ant werpen" → "ant* werpen*"
- */
-function toPrefixQuery(query: string): string {
-  const terms = query.trim().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return query.trim();
-  return terms.map((word) => word.replace(/\*+$/, '') + '*').join(' ');
+/** Escape voor ILIKE-pattern: % en _ zijn wildcards. */
+function escapeForLike(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
 /**
- * GET /api/search?q=... — Full-text zoek in document_texts (Plan: Zoekfeature).
- * Gebruikt prefix-matching: "ant" vindt ook "Antwerpen", "antwoord", enz.
+ * GET /api/search?q=... — Zoek in document_texts.
+ * Gebruikt ILIKE (substring): "ant" vindt "Antwerpen", "antwoord", "gigant", enz.
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -74,13 +69,13 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const prefixQ = toPrefixQuery(q);
+  const pattern = `%${escapeForLike(q)}%`;
 
   try {
     const { data, error } = await supabase
       .from('document_texts')
       .select('id, dropbox_path, name, full_text, created_at')
-      .textSearch('full_text_tsv', prefixQ, { type: 'websearch', config: 'dutch' })
+      .ilike('full_text', pattern)
       .limit(50);
 
     if (error) {
