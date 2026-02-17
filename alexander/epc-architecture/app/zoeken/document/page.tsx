@@ -1,39 +1,13 @@
 'use client'
 
 import { useState, useEffect, useMemo, Suspense } from 'react'
-import dynamic from 'next/dynamic'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowLeft, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ErrorBoundary } from '@/components/error-boundary'
 import { cn } from '@/lib/utils'
 
-// PDF viewer alleen client-side; bij falen tonen we fallback (geen app-crash)
-const PdfViewerWithSearch = dynamic(
-  () =>
-    import('./PdfViewerWithSearch')
-      .then((m) => m.PdfViewerWithSearch)
-      .catch(() => ({
-        default: function PdfViewerFallback() {
-          return (
-            <div className="flex flex-col items-center justify-center h-[500px] gap-2 text-muted-foreground text-sm">
-              <AlertCircle className="h-10 w-10" />
-              <p>PDF-viewer kon niet geladen worden.</p>
-              <p className="text-xs">Probeer de pagina te vernieuwen.</p>
-            </div>
-          )
-        },
-      })),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex items-center justify-center h-[500px]">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    ),
-  }
-)
+// Eenvoudige iframe-viewer: betrouwbaar, geen externe Worker/CORS. Zoekterm staat in "Waar gevonden" hierboven.
 
 function DocumentPageContent() {
   const searchParams = useSearchParams()
@@ -42,6 +16,7 @@ function DocumentPageContent() {
   const name = searchParams.get('name') ?? 'Document'
 
   const [pdfError, setPdfError] = useState<string | null>(null)
+  const [pdfLoading, setPdfLoading] = useState(true)
   const [snippetsOpen, setSnippetsOpen] = useState(false)
   const [snippets, setSnippets] = useState<string[]>([])
 
@@ -82,7 +57,7 @@ function DocumentPageContent() {
           </span>
           {q.trim() && (
             <span className="text-xs text-muted-foreground shrink-0">
-              — zoekterm &quot;{q}&quot; wordt in de PDF gemarkeerd
+              — zoekterm &quot;{q}&quot; zie je in &quot;Waar gevonden&quot; hieronder
             </span>
           )}
         </div>
@@ -125,24 +100,30 @@ function DocumentPageContent() {
                 {pdfError}
               </div>
             )}
-            <div className="flex-1 min-h-[500px] rounded-lg border border-border bg-muted/20 overflow-hidden flex flex-col [&_.rpv-core__viewer]:min-h-[500px]">
-              <ErrorBoundary
-                fallback={
-                  <div className="flex flex-col items-center justify-center h-[500px] gap-2 text-muted-foreground text-sm p-4">
-                    <AlertCircle className="h-10 w-10" />
-                    <p>PDF-viewer: er ging iets mis.</p>
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href="/zoeken">Terug naar zoeken</Link>
-                    </Button>
-                  </div>
-                }
-              >
-                <PdfViewerWithSearch
-                  fileUrl={pdfUrl}
-                  keyword={q}
-                  onLoadFail={() => setPdfError('PDF kon niet geladen worden.')}
-                />
-              </ErrorBoundary>
+            <div className="relative flex-1 min-h-[500px] rounded-lg border border-border bg-muted/20 overflow-hidden flex flex-col">
+              <iframe
+                src={pdfUrl}
+                title={name}
+                className={cn(
+                  'w-full flex-1 min-h-[500px] rounded-lg',
+                  pdfLoading && 'opacity-0'
+                )}
+                onLoad={() => { setPdfLoading(false); setPdfError(null) }}
+                onError={() => { setPdfLoading(false); setPdfError('PDF kon niet geladen worden.') }}
+              />
+              {pdfLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-muted/30 rounded-lg">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              )}
+              <div className="mt-2 flex justify-end">
+                <Button variant="ghost" size="sm" asChild>
+                  <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="gap-2">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    PDF in nieuw tabblad openen
+                  </a>
+                </Button>
+              </div>
             </div>
           </>
         )}
