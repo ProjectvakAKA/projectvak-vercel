@@ -1,19 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Dropbox } from 'dropbox';
 
-async function getDropboxClient() {
-  const APP_KEY_TARGET = process.env.APP_KEY_TARGET;
-  const APP_SECRET_TARGET = process.env.APP_SECRET_TARGET;
-  const REFRESH_TOKEN_TARGET = process.env.REFRESH_TOKEN_TARGET;
+/** Georganiseerde PDFs staan in SOURCE (dbx_organize). Fallback op TARGET als SOURCE niet gezet. */
+function getDropboxClientForDocument(): Dropbox {
+  const APP_KEY_SOURCE = process.env.APP_KEY_SOURCE_FULL ?? process.env.APP_KEY_TARGET;
+  const APP_SECRET_SOURCE = process.env.APP_SECRET_SOURCE_FULL ?? process.env.APP_SECRET_TARGET;
+  const REFRESH_SOURCE = process.env.REFRESH_TOKEN_SOURCE_FULL ?? process.env.REFRESH_TOKEN_TARGET;
 
-  if (!APP_KEY_TARGET || !APP_SECRET_TARGET || !REFRESH_TOKEN_TARGET) {
-    throw new Error('Dropbox TARGET credentials not configured');
+  if (!APP_KEY_SOURCE || !APP_SECRET_SOURCE || !REFRESH_SOURCE) {
+    throw new Error('Dropbox credentials ontbreken (zet APP_KEY_SOURCE_FULL + REFRESH_TOKEN_SOURCE_FULL, of TARGET-varianten).');
   }
 
   return new Dropbox({
-    clientId: APP_KEY_TARGET,
-    clientSecret: APP_SECRET_TARGET,
-    refreshToken: REFRESH_TOKEN_TARGET,
+    clientId: APP_KEY_SOURCE,
+    clientSecret: APP_SECRET_SOURCE,
+    refreshToken: REFRESH_SOURCE,
     fetch: fetch,
   });
 }
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const dbx = await getDropboxClient();
+    const dbx = getDropboxClientForDocument();
     const response = await dbx.filesDownload({ path });
     const result = response.result as { fileBinary?: Buffer; fileBlob?: Blob; name?: string };
     const data = result.fileBinary ?? result.fileBlob;
@@ -61,10 +62,22 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (err: unknown) {
-    const e = err as { error?: { error?: { '.tag'?: string }; status?: number } };
-    const status = e?.error?.status ?? 500;
-    const message = status === 404 ? 'PDF niet gevonden in Dropbox.' : 'Kon PDF niet ophalen.';
-    console.error('Document download error:', err);
-    return NextResponse.json({ error: message }, { status });
+    const e = err as {
+      error?: { status?: number; error?: { '.tag'?: string }; error_summary?: string };
+      status?: number;
+    };
+    const status = e?.error?.status ?? e?.status ?? 500;
+    const tag = e?.error?.error?.['.tag'];
+    const summary = e?.error?.error_summary ?? '';
+    console.error('Document download error:', { path, status, tag, summary, err });
+
+    let message = 'Kon PDF niet ophalen.';
+    if (status === 404 || tag === 'path' || /not_found|path/.test(summary)) {
+      message = 'PDF niet gevonden in Dropbox. Controleer het pad.';
+    } else if (status === 401 || status === 403) {
+      message = 'Geen toegang tot Dropbox. Controleer APP_KEY_SOURCE_FULL en REFRESH_TOKEN_SOURCE_FULL in Vercel.';
+    }
+
+    return NextResponse.json({ error: message }, { status: status >= 400 ? status : 500 });
   }
 }
