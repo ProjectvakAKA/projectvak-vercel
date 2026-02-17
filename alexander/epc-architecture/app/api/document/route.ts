@@ -95,21 +95,28 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const e = lastError as { status?: number; error?: { error_summary?: string } };
-  const status = e?.status ?? lastStatus;
-  const summary = String(e?.error?.error_summary ?? '');
-  const isPathNotFound = status === 404 || status === 409 || /path\/not_found|not_found/.test(summary);
+  const e = lastError as { status?: number; statusCode?: number; error?: { error_summary?: string }; error_summary?: string; body?: { error?: { error_summary?: string } } };
+  const status = e?.status ?? e?.statusCode ?? lastStatus;
+  const summary = String(
+    e?.error?.error_summary ?? e?.error_summary ?? e?.body?.error?.error_summary ?? ''
+  );
+  const isPathNotFound =
+    status === 404 ||
+    status === 409 ||
+    /path\/not_found|not_found/i.test(summary);
   let message = 'Kon PDF niet ophalen.';
   if (isPathNotFound) {
     message =
-      'PDF niet gevonden in Dropbox. Zet op Vercel dezelfde Dropbox-account als je pipeline (APP_KEY_SOURCE_FULL + REFRESH_TOKEN_SOURCE_FULL van de account waar de bestanden staan).';
+      'PDF niet gevonden in Dropbox. Zet op Vercel dezelfde Dropbox-account als je pipeline (APP_KEY_SOURCE_FULL + REFRESH_TOKEN_SOURCE_FULL, en eventueel TARGET, van de account waar de bestanden staan).';
   } else if (status === 401 || status === 403) {
     message = 'Geen toegang tot Dropbox. Controleer SOURCE- en TARGET-credentials in Vercel.';
+  } else if (summary) {
+    message = `Kon PDF niet ophalen. (${summary})`;
   }
 
-  console.error('Document download error (all attempts failed):', { pathParam, path, lastStatus, lastError });
+  console.error('Document download error (all attempts failed):', { pathParam, path, status, summary, lastError });
   return NextResponse.json(
-    { error: message, path: path },
+    { error: message, path: path, status, error_summary: summary || undefined },
     { status: status >= 400 ? status : 500 }
   );
 }
