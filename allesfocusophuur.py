@@ -885,6 +885,41 @@ def supabase_update_contract_data(supabase_config, json_name, json_data):
     return r
 
 
+def supabase_upsert_document_text(supabase_config, dropbox_path: str, name: str, full_text: str):
+    """Geëxtraheerde tekst opslaan voor full-text zoeken (document_texts). Upsert: POST, bij 409 PATCH."""
+    import requests
+    from urllib.parse import quote
+    url = supabase_config["url"]
+    text_value = (full_text[:500000] if full_text else "") or ""
+    body = {"dropbox_path": dropbox_path, "name": name, "full_text": text_value}
+    headers = _supabase_headers(supabase_config)
+    r = requests.post(
+        f"{url}/rest/v1/document_texts",
+        headers=headers,
+        json=body,
+        timeout=30,
+    )
+    if r.status_code in (200, 201):
+        return r
+    if r.status_code == 409 or "duplicate" in (r.text or "").lower():
+        path_enc = quote(f'"{dropbox_path}"', safe="")
+        name_enc = quote(f'"{name}"', safe="")
+        r2 = requests.patch(
+            f"{url}/rest/v1/document_texts?dropbox_path=eq.{path_enc}&name=eq.{name_enc}",
+            headers={k: v for k, v in headers.items() if k != "Prefer"},
+            json={"full_text": text_value},
+            timeout=30,
+        )
+        if r2.status_code in (200, 204):
+            return r2
+        err = r2.text[:500] if r2.text else "(geen body)"
+        logger.warning(f"document_texts PATCH failed: {r2.status_code} body={err}")
+        raise RuntimeError(f"Supabase document_texts update failed: {r2.status_code} {err}")
+    err_detail = r.text[:500] if r.text else "(geen body)"
+    logger.warning(f"document_texts POST failed: {r.status_code} body={err_detail}")
+    raise RuntimeError(f"Supabase document_texts upsert failed: {r.status_code} {err_detail}")
+
+
 # ============================================================================
 # CSV LOGGING
 # ============================================================================
@@ -2371,6 +2406,26 @@ def process_rental_contract(clients, pdf_info):
         json_name = f"data_{base}_{ts}.json"
         json_file = f"/{json_name}"
         supabase_config = clients.get('supabase')
+
+        # document_texts: altijd schrijven (zoeken + pdf-koppeling luik 4)
+        if supabase_config:
+            text_to_store = (full_text or "").strip()
+            if not text_to_store:
+                print(f"   ⚠️ Geen full_text — schrijven toch rij in document_texts (path/naam voor pdf-koppeling)")
+            for attempt in (1, 2):
+                try:
+                    print(f"   → Saving to document_texts: {pdf_info['name']}" + (" (retry)" if attempt == 2 else ""))
+                    supabase_upsert_document_text(supabase_config, pdf_info['path'], pdf_info['name'], text_to_store)
+                    print(f"   📄 document_texts opgeslagen → zoekbaar / pdf-koppeling luik 4")
+                    break
+                except Exception as doc_err:
+                    logger.warning(f"document_texts save failed (attempt {attempt}): {doc_err}")
+                    if attempt == 2:
+                        print(f"   ❌ CRITICAL: document_texts NIET opgeslagen na 2 pogingen: {doc_err}")
+                    else:
+                        print(f"   ⚠️ document_texts save failed, retry...")
+        else:
+            print(f"   ⚠️ Geen Supabase config — document_texts overgeslagen")
 
         # JSON opslaan: alleen Supabase (via REST API)
         print(f"💾 Saving JSON to Supabase...")

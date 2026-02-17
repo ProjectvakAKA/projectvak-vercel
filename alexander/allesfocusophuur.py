@@ -2667,22 +2667,26 @@ def process_rental_contract(clients, pdf_info):
         json_file = f"/{json_name}"
         supabase_config = clients.get('supabase')
 
-        # Stap 7: geëxtraheerde tekst in Supabase voor zoekfeature (vóór contract, met retry)
-        if supabase_config and full_text:
+        # Stap 7: ALTIJD document_texts schrijven (vóór contract) — anders kan pdf-path in de app geen PDF koppelen
+        if supabase_config:
+            text_to_store = (full_text or "").strip()
+            if not text_to_store:
+                print(f"   ⚠️ Geen full_text — schrijven toch rij in document_texts (path/naam voor pdf-koppeling)")
             for attempt in (1, 2):
                 try:
                     print(f"   → Saving to document_texts: {pdf_info['name']}" + (" (retry)" if attempt == 2 else ""))
-                    supabase_upsert_document_text(supabase_config, pdf_info['path'], pdf_info['name'], full_text)
-                    print(f"   📄 Tekst opgeslagen in Supabase (document_texts) → zoekbaar op /zoeken")
+                    supabase_upsert_document_text(supabase_config, pdf_info['path'], pdf_info['name'], text_to_store)
+                    print(f"   📄 document_texts opgeslagen → zoekbaar / pdf-koppeling luik 4")
                     break
                 except Exception as doc_err:
                     logger.warning(f"document_texts save failed (attempt {attempt}): {doc_err}")
                     if attempt == 2:
-                        print(f"   ❌ document_texts NIET opgeslagen na 2 pogingen: {doc_err}")
+                        print(f"   ❌ CRITICAL: document_texts NIET opgeslagen na 2 pogingen: {doc_err}")
+                        print(f"   ❌ PDF zal niet gekoppeld worden in de app. Controleer Supabase RLS/table.")
                     else:
                         print(f"   ⚠️ document_texts save failed, retry...")
-        elif supabase_config and not full_text:
-            print(f"   ⚠️ Geen full_text — document_texts overgeslagen voor {pdf_info['name']}")
+        else:
+            print(f"   ⚠️ Geen Supabase config — document_texts overgeslagen")
 
         # JSON opslaan: alleen Supabase (via REST API)
         print(f"💾 Saving JSON to Supabase...")
@@ -3153,6 +3157,7 @@ if __name__ == "__main__":
         exit(1)
     
     logger.info("=" * 60)
-    logger.info("🚀 Starting Smart Contract System")
+    logger.info("🚀 Starting Smart Contract System (alexander)")
+    logger.info("   document_texts: ACTIEF → zoeken + pdf-koppeling luik 4")
     logger.info("=" * 60)
     main()
