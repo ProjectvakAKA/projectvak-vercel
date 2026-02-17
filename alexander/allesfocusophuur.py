@@ -765,23 +765,39 @@ def _normalize_dropbox_path(path):
     """Eén vorm voor paden zodat history-check geen dubbele verwerking toelaat."""
     if not path:
         return path
-    p = path.strip()
+    # Eén pad per regel: geen newlines (voorkom path1+path2 in één entry)
+    p = path.strip().split("\n")[0].strip()
     return f"/{p.lstrip('/')}" if p else p
 
 
+def _is_valid_history_line(line):
+    """Filter corrupte regels (twee paden aan elkaar, bv. .../file.pdf/Georganiseerd/...)."""
+    s = line.strip()
+    if not s:
+        return False
+    # Eén geldig pad eindigt op .pdf; bevat geen ".pdf/" (twee paden geplakt)
+    if ".pdf/" in s:
+        return False
+    return True
+
+
 def load_history(filename):
-    """Load processed files from history (paden genormaliseerd)."""
+    """Load processed files from history (paden genormaliseerd). Corrupte regels worden overgeslagen."""
     try:
         with open(filename, 'r', encoding='utf-8') as f:
-            return set(_normalize_dropbox_path(line) for line in f if line.strip())
+            return set(
+                _normalize_dropbox_path(line)
+                for line in f
+                if line.strip() and _is_valid_history_line(line)
+            )
     except FileNotFoundError:
         return set()
 
 
 def add_to_history(filename, path):
-    """Add file to history (pad genormaliseerd)."""
+    """Add file to history (pad genormaliseerd, één pad per regel)."""
     norm = _normalize_dropbox_path(path)
-    if not norm:
+    if not norm or not _is_valid_history_line(norm):
         return
     try:
         with open(filename, 'a', encoding='utf-8') as f:
@@ -796,17 +812,16 @@ def remove_from_history(filename, path):
     if not norm:
         return
     try:
-        # Read all lines
         with open(filename, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-        
-        # Filter out the path to remove (vergelijk genormaliseerd)
-        filtered_lines = [line for line in lines if _normalize_dropbox_path(line) != norm]
-        
-        # Write back
+        # Verwijder deze entry en schrijf alleen geldige regels terug (opruimen corrupte regels)
+        filtered = [
+            line for line in lines
+            if line.strip() and _is_valid_history_line(line) and _normalize_dropbox_path(line) != norm
+        ]
         with open(filename, 'w', encoding='utf-8') as f:
-            f.writelines(filtered_lines)
-        
+            for line in filtered:
+                f.write(line if line.endswith("\n") else line + "\n")
         print(f"   🔄 Removed from history (requeued): {path}")
     except FileNotFoundError:
         # File doesn't exist, nothing to remove
@@ -905,14 +920,17 @@ def supabase_upsert_document_text(supabase_config, dropbox_path: str, name: str,
     """Stap 7: geëxtraheerde tekst opslaan voor full-text zoeken (document_texts)."""
     import requests
     url = supabase_config["url"]
+    body = {"dropbox_path": dropbox_path, "name": name, "full_text": (full_text[:500000] if full_text else "")}
     r = requests.post(
         f"{url}/rest/v1/document_texts",
         headers=_supabase_headers(supabase_config),
-        json={"dropbox_path": dropbox_path, "name": name, "full_text": full_text[:500000] if full_text else ""},
+        json=body,
         timeout=30,
     )
     if r.status_code not in (200, 201):
-        raise RuntimeError(f"Supabase document_texts upsert failed: {r.status_code} {r.text[:200]}")
+        err_detail = r.text[:500] if r.text else "(geen body)"
+        logger.warning(f"document_texts POST failed: {r.status_code} body={err_detail}")
+        raise RuntimeError(f"Supabase document_texts upsert failed: {r.status_code} {err_detail}")
     return r
 
 
@@ -1755,9 +1773,16 @@ def organize_batch(clients, folder_mgr, organized_history, max_docs=BATCH_SIZE):
                     supabase_config = clients.get('supabase')
                     if supabase_config and text:
                         try:
+                            print(f"   → Saving to document_texts: {dest_name}")
                             supabase_upsert_document_text(supabase_config, new_path, dest_name, text)
+                            print(f"   📄 Tekst opgeslagen in Supabase (document_texts) → zoekbaar op /zoeken")
                         except Exception as doc_err:
                             logger.warning(f"document_texts save failed: {doc_err}")
+                            print(f"   ⚠️ document_texts save failed: {doc_err}")
+                    elif not supabase_config:
+                        print(f"   ⚠️ Supabase config ontbreekt — document_texts niet opgeslagen")
+                    elif not text:
+                        print(f"   ⚠️ Geen tekst om op te slaan — document_texts overgeslagen")
 
                 except dropbox.exceptions.ApiError as e:
                     print(f"❌ Move error: {e}")
@@ -2213,11 +2238,8 @@ ALLEEN JSON:"""
 
     for stage_name, prompt in stages.items():
         print(f"      📊 Extracting {stage_name}...")
-        if stage_name in initial_data and initial_data[stage_name]:
-            extracted_sections[stage_name] = initial_data[stage_name]
-            print(f"         ✓ from regels (geen API-call)")
-            continue
-
+        # Altijd AI-extractie per stage (geen skip op basis van regex), zodat we alle velden krijgen.
+        # initial_data van regex wordt niet meer gebruikt om stages over te slaan.
         for attempt in range(3):
             try:
                 response = gemini_client.models.generate_content(
@@ -2276,8 +2298,8 @@ ALLEEN JSON:"""
         # 7 stages per contract, dus min 12s tussen elke stage
         time.sleep(12)  # Na elke stage - respecteert 5 RPM limiet
 
-    rules_count = sum(1 for sn in stages if initial_data.get(sn))
-    record_contract_stages(rules_count, len(stages) - rules_count)
+    # Alle stages zijn via AI uitgevoerd (geen skip meer op basis van regex)
+    record_contract_stages(0, len(stages))
 
     # ========================================================================
     # MERGE ALL STAGES
@@ -2625,9 +2647,14 @@ def process_rental_contract(clients, pdf_info):
         # Stap 7: geëxtraheerde tekst in Supabase voor zoekfeature
         if supabase_config and full_text:
             try:
+                print(f"   → Saving to document_texts: {pdf_info['name']}")
                 supabase_upsert_document_text(supabase_config, pdf_info['path'], pdf_info['name'], full_text)
+                print(f"   📄 Tekst opgeslagen in Supabase (document_texts) → zoekbaar op /zoeken")
             except Exception as doc_err:
                 logger.warning(f"document_texts save failed: {doc_err}")
+                print(f"   ⚠️ document_texts save failed: {doc_err}")
+        elif supabase_config and not full_text:
+            print(f"   ⚠️ Geen full_text — document_texts overgeslagen voor {pdf_info['name']}")
 
         # JSON opslaan: alleen Supabase (via REST API)
         print(f"💾 Saving JSON to Supabase...")

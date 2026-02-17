@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Search as SearchIcon, FileText, Loader2 } from 'lucide-react'
+import Link from 'next/link'
+import { Search as SearchIcon, FileText, Loader2, ExternalLink } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 const DEBOUNCE_MS = 300
@@ -13,6 +15,7 @@ type SearchResult = {
   dropbox_path: string
   name: string
   snippet: string
+  snippets?: string[]
   created_at: string
 }
 
@@ -127,6 +130,14 @@ export default function ZoekenPage() {
                           {r.snippet}
                         </p>
                       )}
+                      <Button variant="outline" size="sm" className="mt-3 gap-2" asChild>
+                        <Link
+                          href={`/zoeken/document?path=${encodeURIComponent(r.dropbox_path)}&q=${encodeURIComponent(query.trim())}&name=${encodeURIComponent(r.name)}`}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          Bekijk PDF in de site
+                        </Link>
+                      </Button>
                     </div>
                   </div>
                 </CardContent>

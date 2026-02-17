@@ -55,18 +55,20 @@ pip install -r requirements.txt
 
 ## 4. Script starten
 
+**Belangrijk:** gebruik altijd het script in **`alexander/`** (niet het bestand `allesfocusophuur.py` in de projectroot). Alleen de alexander-versie schrijft naar `document_texts` en ondersteunt de zoekpagina.
+
 ```bash
 cd alexander
 python allesfocusophuur.py
 ```
 
-Of vanaf de **root** van het project, als je `.env` daar staat en het script daar de env laadt:
+Of vanaf de **root** van het project:
 
 ```bash
 python alexander/allesfocusophuur.py
 ```
 
-Het script laadt `.env` uit de scriptmap en uit de projectroot.
+Het script laadt `.env` uit de scriptmap en uit de projectroot. **Draai nooit `python allesfocusophuur.py` vanuit de root** — dan wordt de oude versie zonder document_texts gebruikt.
 
 ---
 
@@ -89,3 +91,16 @@ Het script laadt `.env` uit de scriptmap en uit de projectroot.
 - [ ] `python allesfocusophuur.py` start zonder "Missing required credentials" of Supabase-/tabel-fouten
 
 Als het script start en je ziet o.a. "✓ All credentials validated successfully" en "✅ Dropbox Organize: ...", dan is de basis in orde.
+
+---
+
+## 6. document_texts blijft leeg (zoeken vindt niets)
+
+- **In de terminal:** bij elk verwerkt document zou je moeten zien:
+  - `→ Saving to document_texts: <bestandsnaam>` en daarna `📄 Tekst opgeslagen in Supabase`
+  - Of `⚠️ document_texts save failed: ...` (dan staat de fout erbij).
+- Zie je **geen** van beide? Dan wordt het schrijf-pad niet gelopen:
+  - **Phase 1 (organize):** alleen voor **nieuwe** PDF’s in de scan-map die nog niet in `organized_history` staan. Documenten die eerder al georganiseerd zijn, worden overgeslagen → geen nieuwe write.
+  - **Phase 2 (analyze):** alleen bij **nieuwe** contractanalyse; bestaande analyses worden overgeslagen.
+- **Oplossing:** twee **nieuwe** PDF’s in de SOURCE/scan-map zetten (nog nooit verwerkt) en het script opnieuw laten draaien. Of in de history-bestanden (organized_history / analyzed_history) de paden van die 2 documenten tijdelijk verwijderen en opnieuw runnen.
+- **Als je wél** `document_texts save failed` ziet: controleer `SUPABASE_URL` en `SUPABASE_SERVICE_KEY` (zelfde project waar je de migratie voor `document_texts` hebt gedraaid). Test handmatig: in Supabase → Table Editor → `document_texts` → kijk of er een rij handmatig in kan; zo niet, controleer RLS of rechten.

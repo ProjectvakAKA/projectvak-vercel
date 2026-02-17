@@ -106,5 +106,17 @@
     "created": "2026-01-31T16:24:53.311267",
     "description": "Beukenhof 14B",
     "file_count": 1
+  },
+  "/Georganiseerd/Verhaal": {
+    "name": "Verhaal",
+    "created": "2026-02-11T16:23:54.008773",
+    "description": "Auto-detected",
+    "file_count": 4
+  },
+  "/Georganiseerd/Contracten/Huurcontracten/Maria_Theresiastraat_78_bus_4": {
+    "name": "Maria_Theresiastraat_78_bus_4",
+    "created": "2026-02-11T16:24:01.528808",
+    "description": "Dit document is een uitgebreid fictief huurcontract voor een appartement aan de Maria-Theresiastraat 78 bus 4 in Leuven. De benodigde map voor dit specifieke adres onder 'Huurcontracten' bestaat nog niet in de bestaande folderstructuur.",
+    "file_count": 1
   }
 }
