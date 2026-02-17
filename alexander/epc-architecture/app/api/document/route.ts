@@ -26,12 +26,20 @@ function getDropboxClients(): { source?: Dropbox; target?: Dropbox } {
   };
 }
 
+async function toBuffer(data: Buffer | Blob | Uint8Array | ArrayBuffer): Promise<Buffer> {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (data instanceof Uint8Array) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  if (typeof (data as Blob).arrayBuffer === 'function') return Buffer.from(await (data as Blob).arrayBuffer());
+  return Buffer.from(data as ArrayBuffer);
+}
+
 async function tryDownload(dbx: Dropbox, path: string): Promise<{ buffer: Buffer; filename: string } | null> {
   const response = await dbx.filesDownload({ path });
-  const result = response.result as { fileBinary?: Buffer; fileBlob?: Blob; name?: string };
+  const result = response.result as { fileBinary?: Buffer | Uint8Array; fileBlob?: Blob; name?: string };
   const data = result.fileBinary ?? result.fileBlob;
   if (!data) return null;
-  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(await (data as Blob).arrayBuffer());
+  const buffer = await toBuffer(data as Buffer | Blob | Uint8Array | ArrayBuffer);
   const filename = result.name ?? 'document.pdf';
   return { buffer, filename };
 }
