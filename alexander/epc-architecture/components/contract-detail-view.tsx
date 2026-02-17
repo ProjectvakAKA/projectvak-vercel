@@ -29,7 +29,7 @@ import {
   Save,
   X,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatDateForDisplay } from '@/lib/utils'
 import { toast } from 'sonner'
 
 interface ContractData {
@@ -958,7 +958,7 @@ export function ContractDetailView({ filename: filenameProp, onBack, embedded, o
                   <>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Start Date</span>
-                      <span className="text-foreground">{contractData.periodes.ingangsdatum}</span>
+                      <span className="text-foreground">{formatDateForDisplay(contractData.periodes.ingangsdatum)}</span>
                     </div>
                     <Separator className="bg-border" />
                   </>

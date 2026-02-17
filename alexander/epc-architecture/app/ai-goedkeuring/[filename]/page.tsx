@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ArrowLeft, FileText, Check, Pencil, Loader2, Save, Eye, Highlighter } from 'lucide-react'
 import { PdfViewerWithSearch } from '@/app/zoeken/document/PdfViewerWithSearch'
-import { cn } from '@/lib/utils'
+import { cn, formatDateForDisplay } from '@/lib/utils'
 
 type Finding = { path: string; label: string; value: string | number | null; status: 'pending' | 'approved' | 'edited' }
 
@@ -347,10 +347,10 @@ export default function AIGoedkeuringDetailPage() {
                             {valueStr != null && valueStr !== '' ? (
                               isHighlighted ? (
                                 <mark className="bg-amber-300/80 dark:bg-amber-500/50 rounded px-0.5 font-medium">
-                                  {valueStr}
+                                  {formatDateForDisplay(valueStr)}
                                 </mark>
                               ) : (
-                                valueStr
+                                formatDateForDisplay(valueStr)
                               )
                             ) : (
                               'Niets gevonden'
