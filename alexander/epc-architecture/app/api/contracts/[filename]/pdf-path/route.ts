@@ -5,7 +5,7 @@ import { validateFilename } from '@/lib/validation';
 type ContractRow = { name: string; data: Record<string, unknown> };
 
 /**
- * Normaliseer adres voor matching: spaties -> underscore, lowercase.
+ * Normaliseer voor matching: spaties -> underscore, lowercase, alleen [a-z0-9_].
  * "Maria Theresiastraat 78 bus 4" -> "maria_theresiastraat_78_bus_4"
  */
 function normalizeForMatch(s: string): string {
@@ -17,9 +17,25 @@ function normalizeForMatch(s: string): string {
 }
 
 /**
+ * Uit contract-bestandsnaam het adres-slug halen: data_Meir_78_bus_3_20250125_123456.json -> meir_78_bus_3
+ */
+function slugFromFilename(name: string): string {
+  const base = name.replace(/^data_/i, '').replace(/_\d{8}_\d{6}\.json$/i, '').trim();
+  return normalizeForMatch(base);
+}
+
+/**
+ * Eerste betekenisvolle token (straatnaam): "meir_78_bus_3" -> "meir"
+ */
+function firstToken(normalized: string): string {
+  const t = normalized.split('_').find((s) => s.length > 0);
+  return t ?? normalized;
+}
+
+/**
  * GET /api/contracts/[filename]/pdf-path
- * Zoekt een PDF in document_texts die bij dit contract hoort (op basis van pand_adres).
- * Returns { path: string | null }
+ * Zoekt een PDF in document_texts die bij dit contract hoort.
+ * Probeert: pand_adres (genormaliseerd), slug uit bestandsnaam, eerste woord van adres.
  */
 export async function GET(
   _request: Request,
@@ -54,28 +70,57 @@ export async function GET(
     const contractData = data.contract_data as Record<string, unknown> | undefined;
     const pand = (contractData?.pand as Record<string, unknown>) || {};
     const adres = (pand.adres as string) || '';
-    if (!adres.trim()) {
-      return NextResponse.json({ path: null });
+
+    const adresNorm = normalizeForMatch(adres);
+    const filenameSlug = slugFromFilename(filename);
+    const first = firstToken(adresNorm || filenameSlug);
+
+    const searchTerms: string[] = [];
+    if (filenameSlug.length >= 2) searchTerms.push(filenameSlug);
+    if (adresNorm.length >= 2 && adresNorm !== filenameSlug) searchTerms.push(adresNorm);
+    if (first.length >= 1 && !searchTerms.includes(first)) searchTerms.push(first);
+
+    const pdfs = (list: { dropbox_path: string; name: string }[]) =>
+      list.filter((d) => d.dropbox_path?.trim().toLowerCase().endsWith('.pdf'));
+
+    const bestMatch = (list: { dropbox_path: string; name: string }[], preferSlug: string): string | null => {
+      const p = pdfs(list);
+      if (p.length === 0) return null;
+      const slug = preferSlug.toLowerCase();
+      const withSlug = p.find(
+        (d) =>
+          d.name?.toLowerCase().includes(slug) || d.dropbox_path?.toLowerCase().includes(slug)
+      );
+      return (withSlug ?? p[0])?.dropbox_path?.trim() ?? null;
+    };
+
+    for (const term of searchTerms) {
+      if (!term) continue;
+      const pattern = `%${term}%`;
+      const byName = await supabase
+        .from('document_texts')
+        .select('dropbox_path, name')
+        .ilike('name', pattern)
+        .limit(30);
+      const byPath = await supabase
+        .from('document_texts')
+        .select('dropbox_path, name')
+        .ilike('dropbox_path', pattern)
+        .limit(30);
+
+      const combined = [...(byName.data || []), ...(byPath.data || [])] as { dropbox_path: string; name: string }[];
+      const seen = new Set<string>();
+      const deduped = combined.filter((d) => {
+        const key = d.dropbox_path ?? '';
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      const path = bestMatch(deduped, filenameSlug || adresNorm);
+      if (path) return NextResponse.json({ path });
     }
 
-    const term = normalizeForMatch(adres);
-    if (!term) return NextResponse.json({ path: null });
-    const pattern = `%${term}%`;
-    const { data: docs, error: docError } = await supabase
-      .from('document_texts')
-      .select('dropbox_path, name')
-      .or(`name.ilike.${pattern},dropbox_path.ilike.${pattern}`)
-      .limit(5);
-
-    if (docError || !docs?.length) {
-      return NextResponse.json({ path: null });
-    }
-
-    const first = (docs as { dropbox_path: string; name: string }[]).find(
-      (d) => d.dropbox_path?.trim().toLowerCase().endsWith('.pdf')
-    );
-    const path = first?.dropbox_path?.trim() ?? null;
-    return NextResponse.json({ path });
+    return NextResponse.json({ path: null });
   } catch {
     return NextResponse.json({ path: null });
   }

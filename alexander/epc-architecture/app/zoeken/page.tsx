@@ -19,6 +19,26 @@ type SearchResult = {
   created_at: string
 }
 
+function HighlightSnippet({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <span>{text}</span>
+  const q = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`(${q})`, 'gi')
+  const parts = text.split(re)
+  return (
+    <span>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <mark key={i} className="bg-amber-300/80 dark:bg-amber-500/50 text-amber-950 dark:text-amber-100 rounded px-0.5 font-medium">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </span>
+  )
+}
+
 export default function ZoekenPage() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
@@ -111,38 +131,51 @@ export default function ZoekenPage() {
           )}
 
           <div className="space-y-3">
-            {results.map((r) => (
-              <Card key={r.id} className="border-border overflow-hidden">
-                <CardContent className="p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="p-2 rounded-lg bg-muted shrink-0">
-                      <FileText className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-foreground truncate" title={r.name}>
-                        {r.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground truncate mt-0.5" title={r.dropbox_path}>
-                        {r.dropbox_path}
-                      </p>
-                      {r.snippet && (
-                        <p className={cn("text-sm text-muted-foreground mt-2 line-clamp-2")}>
-                          {r.snippet}
+            {results.map((r) => {
+              const allSnippets = r.snippets?.length ? r.snippets : (r.snippet ? [r.snippet] : [])
+              const count = allSnippets.length
+              return (
+                <Card key={r.id} className="border-border overflow-hidden">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 rounded-lg bg-muted shrink-0">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-foreground truncate" title={r.name}>
+                          {r.name}
                         </p>
-                      )}
-                      <Button variant="outline" size="sm" className="mt-3 gap-2" asChild>
-                        <Link
-                          href={`/zoeken/document?path=${encodeURIComponent(r.dropbox_path)}&q=${encodeURIComponent(query.trim())}&name=${encodeURIComponent(r.name)}`}
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          Bekijk PDF in de site
-                        </Link>
-                      </Button>
+                        <p className="text-xs text-muted-foreground truncate mt-0.5" title={r.dropbox_path}>
+                          {r.dropbox_path}
+                        </p>
+                        {query.trim() && count > 0 && (
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            {count} vindplaats{count !== 1 ? 'en' : ''} van &quot;{query.trim()}&quot;
+                          </p>
+                        )}
+                        {allSnippets.length > 0 && (
+                          <div className="mt-2 space-y-1.5 max-h-40 overflow-auto rounded-md border border-border/60 bg-muted/30 px-2.5 py-2">
+                            {allSnippets.map((snippet, i) => (
+                              <div key={i} className="text-sm text-foreground/90">
+                                <HighlightSnippet text={snippet} query={query.trim()} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <Button variant="outline" size="sm" className="mt-3 gap-2" asChild>
+                          <Link
+                            href={`/zoeken/document?path=${encodeURIComponent(r.dropbox_path)}&q=${encodeURIComponent(query.trim())}&name=${encodeURIComponent(r.name)}`}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Bekijk PDF in de site
+                          </Link>
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
 
           {query.trim() && !loading && results.length === 0 && !error && (
