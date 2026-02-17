@@ -30,6 +30,11 @@ const nextConfig = {
     SMTP_PORT: process.env.SMTP_PORT,
   },
   outputFileTracingRoot: path.join(__dirname),
+  webpack: (config, { isServer }) => {
+    // pdfjs-dist probeert 'canvas' (Node) te laden; niet nodig in de browser
+    config.resolve.fallback = { ...config.resolve.fallback, canvas: false }
+    return config
+  },
 }
 
 export default nextConfig

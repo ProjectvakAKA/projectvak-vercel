@@ -1,58 +1,38 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Suspense } from 'react'
+import dynamic from 'next/dynamic'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, FileText, Loader2, AlertCircle } from 'lucide-react'
+import { ArrowLeft, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 
-/** Markeert de zoekterm in een snippet. */
-function HighlightSnippet({ text, query }: { text: string; query: string }) {
-  if (!query.trim()) return <span>{text}</span>
-  const q = query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = new RegExp(`(${q})`, 'gi')
-  const parts = text.split(re)
-  return (
-    <span>
-      {parts.map((part, i) =>
-        i % 2 === 1 ? (
-          <mark key={i} className="bg-primary/30 text-primary-foreground rounded px-0.5">
-            {part}
-          </mark>
-        ) : (
-          <span key={i}>{part}</span>
-        )
-      )}
-    </span>
-  )
-}
+// PDF viewer alleen client-side laden (vermijdt canvas/node in build)
+const PdfViewerWithSearch = dynamic(
+  () => import('./PdfViewerWithSearch').then((m) => m.PdfViewerWithSearch),
+  { ssr: false, loading: () => <div className="flex items-center justify-center h-[500px]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div> }
+)
 
-export default function ZoekenDocumentPage() {
+function DocumentPageContent() {
   const searchParams = useSearchParams()
   const path = searchParams.get('path') ?? ''
   const q = searchParams.get('q') ?? ''
   const name = searchParams.get('name') ?? 'Document'
 
-  const [snippets, setSnippets] = useState<string[]>([])
-  const [loadingSnippets, setLoadingSnippets] = useState(!!path && !!q)
-  const [pdfLoading, setPdfLoading] = useState(true)
   const [pdfError, setPdfError] = useState<string | null>(null)
+  const [snippetsOpen, setSnippetsOpen] = useState(false)
+  const [snippets, setSnippets] = useState<string[]>([])
 
   const pdfUrl = useMemo(() => {
     if (!path.trim()) return null
     return `/api/document?path=${encodeURIComponent(path)}`
   }, [path])
 
-  // Haal snippets op (waar de zoekterm gevonden is)
+  // Optioneel: snippets ophalen voor uitklapbare "Waar gevonden" (klein)
   useEffect(() => {
-    if (!path || !q.trim()) {
-      setLoadingSnippets(false)
-      return
-    }
+    if (!path || !q.trim()) return
     let cancelled = false
-    setLoadingSnippets(true)
     fetch(`/api/search?q=${encodeURIComponent(q)}`)
       .then((res) => res.json())
       .then((data) => {
@@ -60,18 +40,13 @@ export default function ZoekenDocumentPage() {
         const hit = (data.results || []).find((r: { dropbox_path: string }) => r.dropbox_path === path)
         setSnippets(hit?.snippets ?? hit?.snippet ? [hit.snippet] : [])
       })
-      .catch(() => {
-        if (!cancelled) setSnippets([])
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingSnippets(false)
-      })
+      .catch(() => {})
     return () => { cancelled = true }
   }, [path, q])
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header: terug naar zoeken + titel */}
+      {/* Header */}
       <div className="flex items-center gap-3 p-4 border-b border-border bg-background shrink-0">
         <Button variant="ghost" size="sm" asChild>
           <Link href={q ? `/zoeken?q=${encodeURIComponent(q)}` : '/zoeken'} className="gap-2">
@@ -84,47 +59,38 @@ export default function ZoekenDocumentPage() {
           <span className="font-medium text-foreground truncate" title={name}>
             {name}
           </span>
-        </div>
-      </div>
-
-      {/* Venster boven de PDF: vindplaatsen */}
-      <div className="shrink-0 border-b border-border bg-muted/40">
-        <div className="px-4 py-2 flex items-center justify-between">
-          <span className="text-sm font-medium text-foreground">
-            Gevonden voor &quot;{q}&quot;
-          </span>
-          {snippets.length > 0 && (
-            <span className="text-xs text-muted-foreground">
-              {snippets.length} vindplaats{snippets.length !== 1 ? 'en' : ''}
+          {q.trim() && (
+            <span className="text-xs text-muted-foreground shrink-0">
+              — zoekterm &quot;{q}&quot; wordt in de PDF gemarkeerd
             </span>
           )}
         </div>
-        <ScrollArea className="max-h-[180px] w-full">
-          <div className="px-4 pb-3 space-y-2">
-            {loadingSnippets ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Vindplaatsen laden…
-              </div>
-            ) : snippets.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-2">
-                Geen vindplaatsen of zoekterm niet meegegeven.
-              </p>
-            ) : (
-              snippets.map((snippet, i) => (
-                <div
-                  key={i}
-                  className="text-sm text-foreground/90 bg-background border border-border rounded-lg px-3 py-2"
-                >
-                  <HighlightSnippet text={snippet} query={q} />
-                </div>
-              ))
-            )}
-          </div>
-        </ScrollArea>
       </div>
 
-      {/* PDF binnen de website: iframe naar eigen API */}
+      {/* Optioneel: uitklapbare sectie met vindplaatsen (tekst) */}
+      {snippets.length > 0 && (
+        <div className="shrink-0 border-b border-border bg-muted/30">
+          <button
+            type="button"
+            onClick={() => setSnippetsOpen((o) => !o)}
+            className="w-full px-4 py-2 flex items-center justify-between text-sm font-medium text-foreground hover:bg-muted/50"
+          >
+            <span>Waar &quot;{q}&quot; in de tekst voorkomt ({snippets.length})</span>
+            {snippetsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+          {snippetsOpen && (
+            <div className="px-4 pb-3 max-h-40 overflow-auto space-y-2">
+              {snippets.map((snippet, i) => (
+                <p key={i} className="text-sm text-muted-foreground bg-background rounded px-2 py-1">
+                  …{snippet}…
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* PDF: viewer met highlight in de pagina zelf */}
       <div className="flex-1 min-h-0 flex flex-col p-4">
         {!pdfUrl ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
@@ -138,32 +104,24 @@ export default function ZoekenDocumentPage() {
                 {pdfError}
               </div>
             )}
-            <div className="relative flex-1 min-h-0 rounded-lg border border-border bg-muted/20 overflow-hidden">
-              <iframe
-                src={pdfUrl}
-                title={name}
-                className={cn(
-                  "w-full h-full min-h-[400px]",
-                  pdfLoading && "opacity-0"
-                )}
-                onLoad={() => {
-                  setPdfLoading(false)
-                  setPdfError(null)
-                }}
-                onError={() => {
-                  setPdfLoading(false)
-                  setPdfError("PDF kon niet geladen worden.")
-                }}
+            <div className="flex-1 min-h-[500px] rounded-lg border border-border bg-muted/20 overflow-hidden flex flex-col [&_.rpv-core__viewer]:min-h-[500px]">
+              <PdfViewerWithSearch
+                fileUrl={pdfUrl}
+                keyword={q}
+                onLoadFail={() => setPdfError('PDF kon niet geladen worden.')}
               />
-              {pdfLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-muted/30 rounded-lg">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              )}
             </div>
           </>
         )}
       </div>
     </div>
+  )
+}
+
+export default function ZoekenDocumentPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-[50vh]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>}>
+      <DocumentPageContent />
+    </Suspense>
   )
 }

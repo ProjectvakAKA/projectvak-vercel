@@ -22,9 +22,15 @@ Maak een `.env.local` bestand in de `epc-architecture` map met de volgende varia
 APP_KEY_TARGET=your_app_key_here
 APP_SECRET_TARGET=your_app_secret_here
 REFRESH_TOKEN_TARGET=your_refresh_token_here
+
+# Dropbox SOURCE Credentials (voor PDF-viewer bij Zoeken → Bekijk PDF)
+# Georganiseerde bestanden staan in SOURCE; zonder deze werkt "Bekijk PDF" niet.
+APP_KEY_SOURCE_FULL=...
+APP_SECRET_SOURCE_FULL=...
+REFRESH_TOKEN_SOURCE_FULL=...
 ```
 
-**Belangrijk:** Deze zijn dezelfde credentials als in je hoofd `.env` bestand voor `APP_KEY_TARGET`, `APP_SECRET_TARGET`, en `REFRESH_TOKEN_TARGET`.
+**Belangrijk:** TARGET =zelfde als in je hoofd `.env`. Voor **Bekijk PDF** (zoekresultaten) moet ook SOURCE gezet zijn in Vercel (APP_KEY_SOURCE_FULL, REFRESH_TOKEN_SOURCE_FULL).
 
 ### 3. Start de development server
 
