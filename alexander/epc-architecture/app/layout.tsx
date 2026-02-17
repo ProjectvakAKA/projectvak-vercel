@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next'
-import { DashboardLayout } from '@/components/dashboard-layout'
 import { AuthGuard } from '@/components/auth-guard'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { Toaster } from 'sonner'
 import './globals.css'
 
@@ -24,9 +24,11 @@ export default function RootLayout({
   return (
     <html lang="nl">
       <body className={`font-sans antialiased`}>
-        <AuthGuard>
-          {children}
-        </AuthGuard>
+        <ErrorBoundary>
+          <AuthGuard>
+            {children}
+          </AuthGuard>
+        </ErrorBoundary>
         <Toaster 
           position="bottom-right" 
           richColors 

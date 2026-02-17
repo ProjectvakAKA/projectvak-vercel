@@ -42,8 +42,18 @@ function buildSnippets(fullText: string | null, query: string): string[] {
 }
 
 /**
+ * Zet zoekterm om naar prefix-query: "ant" → "ant*" zodat ook "Antwerpen", "antwoord" enz. gevonden worden.
+ * Meerdere woorden: "ant werpen" → "ant* werpen*"
+ */
+function toPrefixQuery(query: string): string {
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return query.trim();
+  return terms.map((word) => word.replace(/\*+$/, '') + '*').join(' ');
+}
+
+/**
  * GET /api/search?q=... — Full-text zoek in document_texts (Plan: Zoekfeature).
- * Zoekt in Supabase, niet in Dropbox. Retourneert documenten + snippet.
+ * Gebruikt prefix-matching: "ant" vindt ook "Antwerpen", "antwoord", enz.
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -64,11 +74,13 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const prefixQ = toPrefixQuery(q);
+
   try {
     const { data, error } = await supabase
       .from('document_texts')
       .select('id, dropbox_path, name, full_text, created_at')
-      .textSearch('full_text_tsv', q, { type: 'websearch', config: 'dutch' })
+      .textSearch('full_text_tsv', prefixQ, { type: 'websearch', config: 'dutch' })
       .limit(50);
 
     if (error) {

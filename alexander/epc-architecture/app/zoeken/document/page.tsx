@@ -6,12 +6,33 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { cn } from '@/lib/utils'
 
-// PDF viewer alleen client-side laden (vermijdt canvas/node in build)
+// PDF viewer alleen client-side; bij falen tonen we fallback (geen app-crash)
 const PdfViewerWithSearch = dynamic(
-  () => import('./PdfViewerWithSearch').then((m) => m.PdfViewerWithSearch),
-  { ssr: false, loading: () => <div className="flex items-center justify-center h-[500px]"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div> }
+  () =>
+    import('./PdfViewerWithSearch')
+      .then((m) => m.PdfViewerWithSearch)
+      .catch(() => ({
+        default: function PdfViewerFallback() {
+          return (
+            <div className="flex flex-col items-center justify-center h-[500px] gap-2 text-muted-foreground text-sm">
+              <AlertCircle className="h-10 w-10" />
+              <p>PDF-viewer kon niet geladen worden.</p>
+              <p className="text-xs">Probeer de pagina te vernieuwen.</p>
+            </div>
+          )
+        },
+      })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-[500px]">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    ),
+  }
 )
 
 function DocumentPageContent() {
@@ -105,11 +126,23 @@ function DocumentPageContent() {
               </div>
             )}
             <div className="flex-1 min-h-[500px] rounded-lg border border-border bg-muted/20 overflow-hidden flex flex-col [&_.rpv-core__viewer]:min-h-[500px]">
-              <PdfViewerWithSearch
-                fileUrl={pdfUrl}
-                keyword={q}
-                onLoadFail={() => setPdfError('PDF kon niet geladen worden.')}
-              />
+              <ErrorBoundary
+                fallback={
+                  <div className="flex flex-col items-center justify-center h-[500px] gap-2 text-muted-foreground text-sm p-4">
+                    <AlertCircle className="h-10 w-10" />
+                    <p>PDF-viewer: er ging iets mis.</p>
+                    <Button variant="outline" size="sm" asChild>
+                      <Link href="/zoeken">Terug naar zoeken</Link>
+                    </Button>
+                  </div>
+                }
+              >
+                <PdfViewerWithSearch
+                  fileUrl={pdfUrl}
+                  keyword={q}
+                  onLoadFail={() => setPdfError('PDF kon niet geladen worden.')}
+                />
+              </ErrorBoundary>
             </div>
           </>
         )}
