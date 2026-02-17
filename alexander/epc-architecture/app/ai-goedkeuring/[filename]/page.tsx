@@ -288,6 +288,7 @@ export default function AIGoedkeuringDetailPage() {
             {pdfPath && pdfBlobUrl && !pdfLoading && (
               <div className="h-full overflow-auto">
                 <PdfViewerWithSearch
+                  key={highlightInPdf ?? '_none_'}
                   fileUrl={pdfBlobUrl}
                   keyword={highlightInPdf ?? ''}
                   onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')}
@@ -343,7 +344,17 @@ export default function AIGoedkeuringDetailPage() {
                           </div>
                         ) : (
                           <span className={cn('font-medium', !valueStr && 'text-muted-foreground italic')}>
-                            {valueStr ?? 'Niets gevonden'}
+                            {valueStr != null && valueStr !== '' ? (
+                              isHighlighted ? (
+                                <mark className="bg-amber-300/80 dark:bg-amber-500/50 rounded px-0.5 font-medium">
+                                  {valueStr}
+                                </mark>
+                              ) : (
+                                valueStr
+                              )
+                            ) : (
+                              'Niets gevonden'
+                            )}
                           </span>
                         )}
                       </div>

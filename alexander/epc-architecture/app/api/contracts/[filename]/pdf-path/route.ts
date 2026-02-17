@@ -74,25 +74,36 @@ export async function GET(
     const adresNorm = normalizeForMatch(adres);
     const filenameSlug = slugFromFilename(filename);
     const first = firstToken(adresNorm || filenameSlug);
-
-    const searchTerms: string[] = [];
-    if (filenameSlug.length >= 2) searchTerms.push(filenameSlug);
-    if (adresNorm.length >= 2 && adresNorm !== filenameSlug) searchTerms.push(adresNorm);
-    if (first.length >= 1 && !searchTerms.includes(first)) searchTerms.push(first);
+    const preferSlug = filenameSlug || adresNorm || first;
 
     const pdfs = (list: { dropbox_path: string; name: string }[]) =>
       list.filter((d) => d.dropbox_path?.trim().toLowerCase().endsWith('.pdf'));
 
-    const bestMatch = (list: { dropbox_path: string; name: string }[], preferSlug: string): string | null => {
+    const bestMatch = (list: { dropbox_path: string; name: string }[], slug: string): string | null => {
       const p = pdfs(list);
       if (p.length === 0) return null;
-      const slug = preferSlug.toLowerCase();
+      const s = slug.toLowerCase();
       const withSlug = p.find(
         (d) =>
-          d.name?.toLowerCase().includes(slug) || d.dropbox_path?.toLowerCase().includes(slug)
+          d.name?.toLowerCase().includes(s) || d.dropbox_path?.toLowerCase().includes(s)
       );
       return (withSlug ?? p[0])?.dropbox_path?.trim() ?? null;
     };
+
+    const dedupe = (list: { dropbox_path: string; name: string }[]) => {
+      const seen = new Set<string>();
+      return list.filter((d) => {
+        const key = d.dropbox_path ?? '';
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+
+    const searchTerms: string[] = [];
+    if (first.length >= 1) searchTerms.push(first);
+    if (filenameSlug.length >= 2 && filenameSlug !== first) searchTerms.push(filenameSlug);
+    if (adresNorm.length >= 2 && adresNorm !== filenameSlug && adresNorm !== first) searchTerms.push(adresNorm);
 
     for (const term of searchTerms) {
       if (!term) continue;
@@ -101,24 +112,48 @@ export async function GET(
         .from('document_texts')
         .select('dropbox_path, name')
         .ilike('name', pattern)
-        .limit(30);
+        .limit(50);
       const byPath = await supabase
         .from('document_texts')
         .select('dropbox_path, name')
         .ilike('dropbox_path', pattern)
-        .limit(30);
+        .limit(50);
 
       const combined = [...(byName.data || []), ...(byPath.data || [])] as { dropbox_path: string; name: string }[];
-      const seen = new Set<string>();
-      const deduped = combined.filter((d) => {
-        const key = d.dropbox_path ?? '';
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      const path = bestMatch(deduped, filenameSlug || adresNorm);
+      const path = bestMatch(dedupe(combined), preferSlug);
       if (path) return NextResponse.json({ path });
     }
+
+    const firstTwo = filenameSlug.split('_').slice(0, 2).join('_');
+    if (firstTwo.length >= 2 && firstTwo !== first) {
+      const pattern = `%${firstTwo}%`;
+      const byName = await supabase.from('document_texts').select('dropbox_path, name').ilike('name', pattern).limit(50);
+      const byPath = await supabase.from('document_texts').select('dropbox_path, name').ilike('dropbox_path', pattern).limit(50);
+      const combined = [...(byName.data || []), ...(byPath.data || [])] as { dropbox_path: string; name: string }[];
+      const path = bestMatch(dedupe(combined), preferSlug);
+      if (path) return NextResponse.json({ path });
+    }
+
+    const broad = await supabase
+      .from('document_texts')
+      .select('dropbox_path, name')
+      .ilike('name', `%${first}%`)
+      .limit(100);
+    const broadPath = await supabase
+      .from('document_texts')
+      .select('dropbox_path, name')
+      .ilike('dropbox_path', `%${first}%`)
+      .limit(100);
+    const allCandidates = dedupe([
+      ...(broad.data || []),
+      ...(broadPath.data || []),
+    ] as { dropbox_path: string; name: string }[]);
+    const slugLower = preferSlug.toLowerCase();
+    const bySlug = pdfs(allCandidates).find(
+      (d) =>
+        d.name?.toLowerCase().includes(slugLower) || d.dropbox_path?.toLowerCase().includes(slugLower)
+    );
+    if (bySlug?.dropbox_path) return NextResponse.json({ path: bySlug.dropbox_path.trim() });
 
     return NextResponse.json({ path: null });
   } catch {
