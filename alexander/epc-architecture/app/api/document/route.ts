@@ -64,18 +64,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Alleen PDF-bestanden worden ondersteund.' }, { status: 400 });
   }
 
-  const { source, target } = getDropboxClients();
-  if (!source && !target) {
+  const { source } = getDropboxClients();
+  if (!source) {
     return NextResponse.json(
-      { error: 'Dropbox niet geconfigureerd. Zet APP_KEY_SOURCE_FULL + REFRESH_TOKEN_SOURCE_FULL of TARGET-varianten in Vercel.' },
+      { error: 'Dropbox niet geconfigureerd. Zet APP_KEY_SOURCE_FULL, APP_SECRET_SOURCE_FULL en REFRESH_TOKEN_SOURCE_FULL in Vercel (daar staan de documenten).' },
       { status: 503 }
     );
   }
 
-  // Eerst TARGET proberen (waar georganiseerde bestanden kunnen staan), dan SOURCE (dbx_organize)
-  const clients: { name: string; dbx: Dropbox }[] = [];
-  if (target) clients.push({ name: 'TARGET', dbx: target });
-  if (source) clients.push({ name: 'SOURCE', dbx: source });
+  // Alleen SOURCE (dbx_organize – daar staan de documenten)
+  const clients: { name: string; dbx: Dropbox }[] = [{ name: 'SOURCE', dbx: source }];
 
   let lastError: unknown = null;
   let lastStatus = 500;
