@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ArrowLeft, FileText, Check, Pencil, Loader2, Save, Eye, Highlighter } from 'lucide-react'
 import { PdfViewerWithSearch } from '@/app/zoeken/document/PdfViewerWithSearch'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { cn, formatDateForDisplay } from '@/lib/utils'
 
 type Finding = { path: string; label: string; value: string | number | null; status: 'pending' | 'approved' | 'edited' }
@@ -287,12 +288,21 @@ export default function AIGoedkeuringDetailPage() {
             )}
             {pdfPath && pdfBlobUrl && !pdfLoading && (
               <div className="h-full overflow-auto">
-                <PdfViewerWithSearch
-                  key={highlightInPdf ?? '_none_'}
-                  fileUrl={pdfBlobUrl}
-                  keyword={highlightInPdf ?? ''}
-                  onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')}
-                />
+                <ErrorBoundary
+                  fallback={
+                    <div className="flex flex-col items-center justify-center h-full min-h-[200px] p-4 text-center text-sm text-muted-foreground">
+                      <p className="font-medium text-foreground">PDF-viewer kon niet geladen worden.</p>
+                      <p className="mt-1">Je kunt rechts wel velden aanpassen en opslaan.</p>
+                    </div>
+                  }
+                >
+                  <PdfViewerWithSearch
+                    key={pdfBlobUrl}
+                    fileUrl={pdfBlobUrl}
+                    keyword={highlightInPdf ?? ''}
+                    onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')}
+                  />
+                </ErrorBoundary>
               </div>
             )}
           </div>
