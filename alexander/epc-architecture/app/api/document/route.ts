@@ -80,6 +80,26 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Alleen PDF-bestanden worden ondersteund.' }, { status: 400 });
   }
 
+  /** Bij path/not_found: probeer varianten (pipeline gebruikt soms _ waar Dropbox - heeft, bv. Maria_Theresiastraat vs Maria-Theresiastraat). */
+  function pathVariants(p: string): string[] {
+    const out = [p];
+    const allUnderscoreToHyphen = p.replace(/([^/]+)/g, (seg) =>
+      seg.includes('_') && !seg.startsWith('.') ? seg.replace(/_/g, '-') : seg
+    );
+    if (allUnderscoreToHyphen !== p) out.push(allUnderscoreToHyphen);
+    const onlyStreetNameHyphen = p.replace(/([^/]+)/g, (seg) =>
+      seg.includes('_') && /[a-zA-Z]_[a-zA-Z]/.test(seg) ? seg.replace(/([a-zA-Z])_([a-zA-Z])/g, '$1-$2') : seg
+    );
+    if (onlyStreetNameHyphen !== p && !out.includes(onlyStreetNameHyphen)) out.push(onlyStreetNameHyphen);
+    const allHyphenToUnderscore = p.replace(/([^/]+)/g, (seg) =>
+      seg.includes('-') && !seg.startsWith('.') ? seg.replace(/-/g, '_') : seg
+    );
+    if (allHyphenToUnderscore !== p && !out.includes(allHyphenToUnderscore)) out.push(allHyphenToUnderscore);
+    return out;
+  }
+
+  const pathsToTry = pathVariants(path);
+
   const { source } = getDropboxClients();
   if (!source) {
     return NextResponse.json(
@@ -88,32 +108,31 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Alleen SOURCE (dbx_organize – daar staan de documenten)
   const clients: { name: string; dbx: Dropbox }[] = [{ name: 'SOURCE', dbx: source }];
 
   let lastError: unknown = null;
   let lastStatus = 500;
+  let lastPath = path;
 
-  console.info('Document API: requesting path', path, 'clients:', clients.map((c) => c.name));
-  for (const { name, dbx } of clients) {
-    try {
-      console.info('Document API: trying', name);
-      const out = await tryDownload(dbx, path);
-      if (out) {
-        console.info('Document API: success via', name);
-        return new NextResponse(out.buffer, {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/pdf',
-            'Content-Disposition': `inline; filename="${encodeURIComponent(out.filename)}"`,
-          },
-        });
+  for (const tryPath of pathsToTry) {
+    for (const { name, dbx } of clients) {
+      try {
+        const out = await tryDownload(dbx, tryPath);
+        if (out) {
+          return new NextResponse(out.buffer, {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Content-Disposition': `inline; filename="${encodeURIComponent(out.filename)}"`,
+            },
+          });
+        }
+      } catch (err: unknown) {
+        lastError = err;
+        lastPath = tryPath;
+        const e = err as { status?: number; error?: { error_summary?: string } };
+        lastStatus = e?.status ?? 500;
       }
-    } catch (err: unknown) {
-      lastError = err;
-      const e = err as { status?: number; error?: { '.tag'?: string; path?: { '.tag'?: string }; error_summary?: string } };
-      lastStatus = e?.status ?? 500;
-      console.error('Document API: failed via', name, { path, status: e?.status, error_summary: e?.error?.error_summary });
     }
   }
 
@@ -129,14 +148,14 @@ export async function GET(request: NextRequest) {
   let message = 'Kon PDF niet ophalen.';
   if (isPathNotFound) {
     message =
-      'PDF niet gevonden in Dropbox. Zet op Vercel dezelfde Dropbox-account als je pipeline (APP_KEY_SOURCE_FULL + REFRESH_TOKEN_SOURCE_FULL, en eventueel TARGET, van de account waar de bestanden staan).';
+      'PDF niet gevonden in Dropbox na het proberen van pad-varianten (incl. underscore/hyphen). Controleer of SOURCE-credentials op Vercel dezelfde Dropbox-account gebruiken als je pipeline.';
   } else if (status === 401 || status === 403) {
     message = 'Geen toegang tot Dropbox. Controleer SOURCE- en TARGET-credentials in Vercel.';
   } else if (summary) {
     message = `Kon PDF niet ophalen. (${summary})`;
   }
 
-  console.error('Document download error (all attempts failed):', { pathParam, path, status, summary, lastError });
+  console.error('Document download error (all attempts failed):', { pathParam, pathsTried: pathsToTry, lastPath, status, summary, lastError });
   return NextResponse.json(
     { error: message, path: path, status, error_summary: summary || undefined },
     { status: status >= 400 ? status : 500 }

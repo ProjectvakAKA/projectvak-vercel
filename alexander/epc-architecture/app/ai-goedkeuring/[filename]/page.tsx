@@ -7,8 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ArrowLeft, FileText, Check, Pencil, Loader2, Save, Eye, Highlighter } from 'lucide-react'
-import { PdfViewerWithSearch } from '@/app/zoeken/document/PdfViewerWithSearch'
-import { ErrorBoundary } from '@/components/error-boundary'
+import { PdfViewerSimple } from '@/app/zoeken/document/PdfViewerWithSearch'
 import { cn, formatDateForDisplay } from '@/lib/utils'
 
 type Finding = { path: string; label: string; value: string | number | null; status: 'pending' | 'approved' | 'edited' }
@@ -104,8 +103,8 @@ export default function AIGoedkeuringDetailPage() {
         const data = await resContract.json()
         if (cancelled) return
         setContract(data)
-        const cd = data.contract_data || data
-        const flat = flattenContractData(cd, 'contract_data').filter((f) => f.value !== '' && f.value != null)
+        const cd = data?.contract_data ?? data
+        const flat = Array.isArray(cd) ? [] : flattenContractData(cd ?? {}, 'contract_data').filter((f) => f.value !== '' && f.value != null)
         setFindings(flat)
 
         const pdfPathData = await resPdfPath.json().catch(() => ({}))
@@ -287,22 +286,22 @@ export default function AIGoedkeuringDetailPage() {
               </div>
             )}
             {pdfPath && pdfBlobUrl && !pdfLoading && (
-              <div className="h-full overflow-auto">
-                <ErrorBoundary
-                  fallback={
-                    <div className="flex flex-col items-center justify-center h-full min-h-[200px] p-4 text-center text-sm text-muted-foreground">
-                      <p className="font-medium text-foreground">PDF-viewer kon niet geladen worden.</p>
-                      <p className="mt-1">Je kunt rechts wel velden aanpassen en opslaan.</p>
-                    </div>
-                  }
-                >
-                  <PdfViewerWithSearch
-                    key={pdfBlobUrl}
-                    fileUrl={pdfBlobUrl}
-                    keyword={highlightInPdf ?? ''}
-                    onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')}
+              <div className="h-full min-h-0 flex flex-col">
+                {highlightInPdf != null && highlightInPdf !== '' ? (
+                  <iframe
+                    title="PDF met fluo"
+                    src={`/ai-goedkeuring/viewer?path=${encodeURIComponent(pdfPath)}&keyword=${encodeURIComponent(highlightInPdf)}`}
+                    className="h-full w-full min-h-[280px] border-0 rounded"
                   />
-                </ErrorBoundary>
+                ) : (
+                  <div className="h-full overflow-auto">
+                    <PdfViewerSimple
+                      key={pdfBlobUrl}
+                      fileUrl={pdfBlobUrl}
+                      onLoadFail={() => setPdfError('PDF kon niet weergegeven worden.')}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
