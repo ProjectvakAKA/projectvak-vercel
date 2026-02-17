@@ -3,6 +3,22 @@ import { Dropbox } from 'dropbox';
 
 type DropboxCreds = { clientId: string; clientSecret: string; refreshToken: string };
 
+/**
+ * Fetch wrapper voor Dropbox SDK op Vercel/Node 18+.
+ * De SDK roept res.buffer() aan bij download, maar native fetch heeft alleen .arrayBuffer().
+ * Deze wrapper voegt .buffer() toe zodat de SDK niet crasht.
+ */
+function dropboxFetch(url: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return fetch(url, init).then((res) => {
+    if (!res.buffer && typeof res.arrayBuffer === 'function') {
+      (res as Response & { buffer?: () => Promise<Buffer> }).buffer = function () {
+        return res.arrayBuffer().then((ab) => Buffer.from(ab));
+      };
+    }
+    return res;
+  });
+}
+
 function getDropboxClients(): { source?: Dropbox; target?: Dropbox } {
   const source: DropboxCreds | null =
     process.env.APP_KEY_SOURCE_FULL && process.env.APP_SECRET_SOURCE_FULL && process.env.REFRESH_TOKEN_SOURCE_FULL
@@ -21,8 +37,8 @@ function getDropboxClients(): { source?: Dropbox; target?: Dropbox } {
         }
       : null;
   return {
-    source: source ? new Dropbox({ ...source, fetch }) : undefined,
-    target: target ? new Dropbox({ ...target, fetch }) : undefined,
+    source: source ? new Dropbox({ ...source, fetch: dropboxFetch }) : undefined,
+    target: target ? new Dropbox({ ...target, fetch: dropboxFetch }) : undefined,
   };
 }
 
